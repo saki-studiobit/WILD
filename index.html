@@ -2388,27 +2388,47 @@ function renderMorningPriority(){
 
   const pinned = ui.priorityCat==='all' ? allPinned : allPinned.filter(i=>i.locId===ui.priorityCat);
 
-  const groups = new Map();
-  pinned.forEach(i=>{
+  function renderSingleRow(i){
+    const s = itemStatus(i);
+    const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
     const loc = DB.locations.find(l=>l.id===i.locId);
-    const key = loc ? loc.name : 'Other';
-    if(!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(i);
-  });
+    return `<div class="item-row" onclick="openItemModal('${i.id}')">
+      <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
+        <div><p class="item-name">${i.name}</p><p class="item-meta">${ui.priorityCat==='all' && loc ? loc.name+' · ' : ''}${i.qty} ${i.unit}</p></div>
+      </div>
+      <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+    </div>`;
+  }
 
-  const sections = Array.from(groups.entries()).map(([locName, items])=>{
-    const rows = items.map(i=>{
-      const s = itemStatus(i);
-      const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
-      return `<div class="item-row" onclick="openItemModal('${i.id}')">
-        <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
-          <div><p class="item-name">${i.name}</p><p class="item-meta">${i.qty} ${i.unit}</p></div>
+  let sections;
+  if(ui.priorityCat==='all'){
+    const groups = new Map();
+    pinned.forEach(i=>{
+      const key = i.name.trim().toLowerCase()+'|'+i.unit;
+      if(!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(i);
+    });
+    const rows = Array.from(groups.values()).map(group=>{
+      if(group.length===1) return renderSingleRow(group[0]);
+      const total = Math.round(group.reduce((sum,i)=>sum+i.qty,0)*100)/100;
+      const groupLow = Math.max(...group.map(i=>i.low||0));
+      const groupUrgent = Math.max(...group.map(i=>i.urgent||0));
+      const worst = total<=groupUrgent ? 'urgent' : total<=groupLow ? 'low' : 'ok';
+      const first = group[0];
+      const thumb = first.photo ? `<img class="item-thumb" src="${first.photo}" />` : `<div class="item-thumb">${initials(first.name)}</div>`;
+      const idsCsv = group.map(i=>i.id).join(',');
+      return `<div class="item-row" onclick="openItemGroupModal('${idsCsv}')">
+        <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>
+          <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total</p></div>
         </div>
-        <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+        <span class="badge ${statusBadgeClass(worst)}">${statusLabel(worst)}</span>
       </div>`;
     }).join('');
-    return `<div class="section-title">${locName}</div><div class="card" style="padding:6px 12px;">${rows}</div>`;
-  }).join('');
+    sections = `<div class="card" style="padding:6px 12px;">${rows}</div>`;
+  } else {
+    const rows = pinned.map(renderSingleRow).join('');
+    sections = `<div class="card" style="padding:6px 12px;">${rows}</div>`;
+  }
 
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Morning Priority Inventory</p></div></header>

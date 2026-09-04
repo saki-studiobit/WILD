@@ -688,11 +688,33 @@ function openItemGroupModal(idsCsv){
   ui.modal = {type:'item-group', itemIds: idsCsv.split(',')};
   render();
 }
+function moveItem(itemId, direction, contextIdsCsv){
+  const contextIds = contextIdsCsv.split(',');
+  const idx = contextIds.indexOf(itemId);
+  const targetIdx = idx + direction;
+  if(idx===-1 || targetIdx<0 || targetIdx>=contextIds.length) return;
+  const neighborId = contextIds[targetIdx];
+  const itemPos = DB.items.findIndex(i=>i.id===itemId);
+  if(itemPos===-1) return;
+  const [moved] = DB.items.splice(itemPos, 1);
+  const neighborPos = DB.items.findIndex(i=>i.id===neighborId);
+  const insertAt = direction<0 ? neighborPos : neighborPos+1;
+  DB.items.splice(insertAt, 0, moved);
+  persist(['items']);
+  render();
+}
 
 function saveItemQty(itemId, delta){
   const item = DB.items.find(i=>i.id===itemId);
   if(!item) return;
   item.qty = Math.max(0, Math.round((item.qty + delta)*100)/100);
+  render();
+}
+function setItemQtyDirect(itemId, value){
+  const item = DB.items.find(i=>i.id===itemId);
+  if(!item) return;
+  const v = parseFloat(value);
+  if(!isNaN(v)) item.qty = Math.max(0, Math.round(v*100)/100);
   render();
 }
 function commitItemQty(itemId){
@@ -1547,16 +1569,24 @@ function renderStock(){
       </div>`;
     }).join('') : `<div class="empty-note">No items match here yet.</div>`;
   } else {
-    rows = items.length ? items.map(i=>{
+    const idsCsv = items.map(i=>i.id).join(',');
+    rows = items.length ? items.map((i, idx)=>{
       const s = itemStatus(i);
       const loc = DB.locations.find(l=>l.id===i.locId);
       const sub = loc ? loc.subs.find(x=>x.id===i.subId) : null;
       const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+      const moveBtns = isMgr(u) ? `<div style="display:flex;flex-direction:column;margin-left:6px;">
+        <button class="link-btn" style="padding:0;line-height:1;${idx===0?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',-1,'${idsCsv}')">▲</button>
+        <button class="link-btn" style="padding:0;line-height:1;${idx===items.length-1?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',1,'${idsCsv}')">▼</button>
+      </div>` : '';
       return `<div class="item-row" onclick="openItemModal('${i.id}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
           <div><p class="item-name">${i.name}</p><p class="item-meta">${sub?sub.name:''} · ${i.qty} ${i.unit}</p></div>
         </div>
-        <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+        <div style="display:flex;align-items:center;">
+          <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+          ${moveBtns}
+        </div>
       </div>`;
     }).join('') : `<div class="empty-note">No items match here yet.</div>`;
   }
@@ -1806,7 +1836,7 @@ function renderProfile(){
   if(!isOwner(u)){
     const weekStart = dateStr(mondayOf(new Date()));
     const dayRows = renderWeeklyScheduleRows(u.id, weekStart);
-    scheduleCard = `<div class="section-title">Your schedule this week</div><div class="card" style="padding:6px 16px;">${dayRows}</div>`;
+    scheduleCard = `<div class="section-title">Your schedule this week</div><div class="card" style="padding:6px 16px;">${dayRows}</div><button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openMyScheduleScreen()">View full schedule (more weeks) →</button>`;
   }
 
   const reportsCard = isOwner(u) ? `
@@ -2089,7 +2119,7 @@ function renderItemQtyModal(){
       <p style="text-align:center;"><span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span></p>
       <div class="qty-control">
         <button class="qty-btn" onclick="saveItemQty('${item.id}', -1)">–</button>
-        <span class="qty-val">${item.qty}</span>
+        <input type="number" step="0.1" value="${item.qty}" class="qty-val" style="width:100px;text-align:center;border:1px solid var(--border);border-radius:10px;padding:6px 4px;background:var(--surface);" onchange="setItemQtyDirect('${item.id}', this.value)" />
         <button class="qty-btn" onclick="saveItemQty('${item.id}', 1)">+</button>
       </div>
       <p style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:-8px;">${item.unit}</p>
@@ -2387,16 +2417,25 @@ function renderMorningPriority(){
   }).join('');
 
   const pinned = ui.priorityCat==='all' ? allPinned : allPinned.filter(i=>i.locId===ui.priorityCat);
+  const u = currentUser();
+  const pinnedIdsCsv = pinned.map(i=>i.id).join(',');
 
-  function renderSingleRow(i){
+  function renderSingleRow(i, idx){
     const s = itemStatus(i);
     const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
     const loc = DB.locations.find(l=>l.id===i.locId);
+    const moveBtns = (isMgr(u) && idx!==undefined) ? `<div style="display:flex;flex-direction:column;margin-left:6px;">
+      <button class="link-btn" style="padding:0;line-height:1;${idx===0?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',-1,'${pinnedIdsCsv}')">▲</button>
+      <button class="link-btn" style="padding:0;line-height:1;${idx===pinned.length-1?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',1,'${pinnedIdsCsv}')">▼</button>
+    </div>` : '';
     return `<div class="item-row" onclick="openItemModal('${i.id}')">
       <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
         <div><p class="item-name">${i.name}</p><p class="item-meta">${ui.priorityCat==='all' && loc ? loc.name+' · ' : ''}${i.qty} ${i.unit}</p></div>
       </div>
-      <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+      <div style="display:flex;align-items:center;">
+        <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+        ${moveBtns}
+      </div>
     </div>`;
   }
 
@@ -2426,7 +2465,7 @@ function renderMorningPriority(){
     }).join('');
     sections = `<div class="card" style="padding:6px 12px;">${rows}</div>`;
   } else {
-    const rows = pinned.map(renderSingleRow).join('');
+    const rows = pinned.map((i,idx)=>renderSingleRow(i,idx)).join('');
     sections = `<div class="card" style="padding:6px 12px;">${rows}</div>`;
   }
 

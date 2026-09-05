@@ -703,6 +703,25 @@ function moveItem(itemId, direction, contextIdsCsv){
   persist(['items']);
   render();
 }
+function moveItemRow(rowIdsPlus, direction, contextRowsCsv){
+  const rows = contextRowsCsv.split(',').map(r=>r.split('+'));
+  const rowIds = rowIdsPlus.split('+');
+  const idx = rows.findIndex(r=>r.join('+')===rowIdsPlus);
+  const targetIdx = idx + direction;
+  if(idx===-1 || targetIdx<0 || targetIdx>=rows.length) return;
+  const neighborRow = rows[targetIdx];
+  const moving = [];
+  rowIds.forEach(id=>{
+    const pos = DB.items.findIndex(i=>i.id===id);
+    if(pos>-1) moving.push(DB.items.splice(pos,1)[0]);
+  });
+  let neighborPos = DB.items.findIndex(i=>i.id===(direction<0 ? neighborRow[0] : neighborRow[neighborRow.length-1]));
+  if(neighborPos===-1) neighborPos = direction<0 ? 0 : DB.items.length-1;
+  const insertAt = direction<0 ? neighborPos : neighborPos+1;
+  DB.items.splice(insertAt, 0, ...moving);
+  persist(['items']);
+  render();
+}
 
 function saveItemQty(itemId, delta){
   const item = DB.items.find(i=>i.id===itemId);
@@ -2459,8 +2478,29 @@ function renderMorningPriority(){
       if(!groups.has(key)) groups.set(key, []);
       groups.get(key).push(i);
     });
-    const rows = Array.from(groups.values()).map(group=>{
-      if(group.length===1) return renderSingleRow(group[0]);
+    const groupList = Array.from(groups.values());
+    const rowsContext = groupList.map(group=>group.map(i=>i.id).join('+')).join(',');
+    const rows = groupList.map((group, idx)=>{
+      const rowIdsPlus = group.map(i=>i.id).join('+');
+      const moveBtns = isMgr(u) ? `<div style="display:flex;flex-direction:column;margin-left:6px;">
+        <button class="link-btn" style="padding:0;line-height:1;${idx===0?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItemRow('${rowIdsPlus}',-1,'${rowsContext}')">▲</button>
+        <button class="link-btn" style="padding:0;line-height:1;${idx===groupList.length-1?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItemRow('${rowIdsPlus}',1,'${rowsContext}')">▼</button>
+      </div>` : '';
+      if(group.length===1){
+        const i = group[0];
+        const s = itemStatus(i);
+        const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+        const loc = DB.locations.find(l=>l.id===i.locId);
+        return `<div class="item-row" onclick="openItemModal('${i.id}')">
+          <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
+            <div><p class="item-name">${i.name}</p><p class="item-meta">${loc?loc.name+' · ':''}${i.qty} ${i.unit}</p></div>
+          </div>
+          <div style="display:flex;align-items:center;">
+            <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
+            ${moveBtns}
+          </div>
+        </div>`;
+      }
       const total = Math.round(group.reduce((sum,i)=>sum+i.qty,0)*100)/100;
       const groupLow = Math.max(...group.map(i=>i.low||0));
       const groupUrgent = Math.max(...group.map(i=>i.urgent||0));
@@ -2472,7 +2512,10 @@ function renderMorningPriority(){
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>
           <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total</p></div>
         </div>
-        <span class="badge ${statusBadgeClass(worst)}">${statusLabel(worst)}</span>
+        <div style="display:flex;align-items:center;">
+          <span class="badge ${statusBadgeClass(worst)}">${statusLabel(worst)}</span>
+          ${moveBtns}
+        </div>
       </div>`;
     }).join('');
     sections = `<div class="card" style="padding:6px 12px;">${rows}</div>`;

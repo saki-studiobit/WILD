@@ -1094,7 +1094,13 @@ function setScheduleForDate(userId, ds, shiftId){
 /* ---------- stock page filters ---------- */
 function setStockCat(catId){ ui.stockCat = catId; ui.stockSub = 'all'; render(); }
 function setStockSub(subId){ ui.stockSub = subId; render(); }
-function onStockSearch(value){ ui.stockSearch = value; render(); }
+function onStockSearch(el){
+  const pos = el.selectionStart;
+  ui.stockSearch = el.value;
+  render();
+  const newEl = document.getElementById('stock-search-input');
+  if(newEl){ newEl.focus(); newEl.setSelectionRange(pos, pos); }
+}
 function addMainCategoryFromStock(){
   const name = prompt('Name the new main category (e.g. "Delivery station")');
   if(!name || !name.trim()) return;
@@ -1601,7 +1607,7 @@ function renderStock(){
   </header>
   <div class="screen" style="padding-top:0;">
     <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="openOilLogScreen()">🛢 Cooking Oil Reporting</button>
-    <div class="search-wrap"><input placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this.value)" /></div>
+    <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
     ${subChips}
     <div class="card" style="padding:6px 12px;">${rows}</div>
@@ -1634,7 +1640,13 @@ function renderManageLocations(){
   <div class="screen" style="padding-top:0;">${rows}</div>`;
 }
 
-function onRecipeSearch(value){ ui.recipeSearch = value; render(); }
+function onRecipeSearch(el){
+  const pos = el.selectionStart;
+  ui.recipeSearch = el.value;
+  render();
+  const newEl = document.getElementById('recipe-search-input');
+  if(newEl){ newEl.focus(); newEl.setSelectionRange(pos, pos); }
+}
 function renderRecipes(){
   const u = currentUser();
   const catChips = ['all', ...RECIPE_CATEGORIES].map(c=>
@@ -1659,7 +1671,7 @@ function renderRecipes(){
   <div class="screen" style="padding-top:0;">
     ${isMgr(u) ? `<div class="fab-row"><button class="btn" onclick="openRecipeModal(null)">+ Add recipe</button></div>
     <div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="document.getElementById('hidden-recipe-csv-input').click()">Import CSV</button><button class="btn btn-secondary" onclick="downloadRecipeTemplate()">Download template</button></div>` : ''}
-    <div class="search-wrap"><input placeholder="Search recipes..." value="${ui.recipeSearch}" oninput="onRecipeSearch(this.value)" /></div>
+    <div class="search-wrap"><input id="recipe-search-input" placeholder="Search recipes..." value="${ui.recipeSearch}" oninput="onRecipeSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
     ${rows}
   </div>`;

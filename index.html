@@ -216,7 +216,7 @@ let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[]
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
-  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null };
+  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null, teamScheduleWeekStart:null };
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
 function currentUser(){ return DB.users.find(u=>u.id===session.userId) || null; }
@@ -1366,6 +1366,7 @@ function render(){
   if(ui.screen==='events-manage'){ body = renderEventsManage(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='schedule-edit'){ body = renderScheduleEdit(); app.innerHTML = body; return; }
   if(ui.screen==='my-schedule'){ body = renderMySchedule(); app.innerHTML = body; return; }
+  if(ui.screen==='team-schedule'){ body = renderTeamSchedule(); app.innerHTML = body; return; }
   if(ui.screen==='security-log'){ body = renderSecurityLog(); app.innerHTML = body; return; }
   if(ui.screen==='checklist-hub'){ body = renderChecklistHub(); app.innerHTML = body; return; }
   if(ui.screen==='morning-priority'){ body = renderMorningPriority(); app.innerHTML = body + renderModal(); return; }
@@ -1506,6 +1507,7 @@ function renderHome(){
     return `
     <header class="topbar"><div><p class="greet">Hi, ${u.name.split(' ')[0]}</p><p class="greet-sub">Inventory at a glance</p></div></header>
     <div class="screen" style="padding-top:0;">
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openTeamScheduleScreen()">📅 View Team Schedule</button>
       ${eventsCard}
       ${renderNotesCard()}
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openAttendanceTodayScreen()">🕒 Today's Time In/Out</button>
@@ -1856,6 +1858,29 @@ function renderMySchedule(){
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftMyScheduleWeek(1)">Next ›</button>
     </div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
+  </div>`;
+}
+function openTeamScheduleScreen(){ ui.screen='team-schedule'; ui.teamScheduleWeekStart = dateStr(mondayOf(new Date())); render(); }
+function shiftTeamScheduleWeek(delta){ ui.teamScheduleWeekStart = addDays(ui.teamScheduleWeekStart, delta*7); render(); }
+function renderTeamSchedule(){
+  if(!ui.teamScheduleWeekStart) ui.teamScheduleWeekStart = dateStr(mondayOf(new Date()));
+  const weekStart = ui.teamScheduleWeekStart;
+  const weekEnd = addDays(weekStart, 6);
+  const weekLabel = new Date(weekStart+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + new Date(weekEnd+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
+  const clockers = DB.users.filter(u=>!isOwner(u));
+  const sections = clockers.map(m=>{
+    const rows = renderWeeklyScheduleRows(m.id, weekStart);
+    return `<div class="section-title">${m.name} <span style="text-transform:capitalize;color:var(--text-muted);">(${m.role})</span></div><div class="card" style="padding:6px 16px;">${rows}</div>`;
+  }).join('');
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Team Schedule</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftTeamScheduleWeek(-1)">‹ Prev</button>
+      <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftTeamScheduleWeek(1)">Next ›</button>
+    </div>
+    ${sections || '<div class="empty-note">No staff or managers yet.</div>'}
   </div>`;
 }
 function renderProfile(){

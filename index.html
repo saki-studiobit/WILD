@@ -1825,20 +1825,52 @@ function renderAttendanceToday(){
   </div>`;
 }
 
-function renderWeeklyScheduleRows(userId, weekStart){
-  return [0,1,2,3,4,5,6].map(offset=>{
+const SHIFT_COLORS = ['#7FD1AE','#8BD46E','#7FE8D0','#8FC7F0','#F2A6A0','#C6A8F0','#F0C57F'];
+const DAY_LETTERS = ['Su','M','T','W','Th','F','Sa'];
+const DAYOFF_COLOR = '#FBE577';
+function shiftColorFor(shiftId){
+  let hash = 0;
+  for(let i=0;i<shiftId.length;i++){ hash = (hash*31 + shiftId.charCodeAt(i)) >>> 0; }
+  return SHIFT_COLORS[hash % SHIFT_COLORS.length];
+}
+function formatTimeShort(t){
+  const [h,m] = t.split(':').map(Number);
+  const period = h>=12 ? 'PM' : 'AM';
+  let h12 = h%12; if(h12===0) h12=12;
+  return m===0 ? `${h12}${period}` : `${h12}:${String(m).padStart(2,'0')}${period}`;
+}
+function renderScheduleTable(usersToShow, weekStart){
+  const days = [0,1,2,3,4,5,6].map(offset=>{
     const ds = addDays(weekStart, offset);
-    const label = new Date(ds+'T00:00:00').toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
-    const shift = shiftForUserOnDate(userId, ds);
-    const dayEvents = DB.events.filter(e=>e.date===ds);
-    const eventLine = dayEvents.length ? `<div style="font-size:11px;color:var(--accent);margin-top:2px;">${dayEvents.map(e=>'🎉 '+formatEventTime(e)+' '+e.title).join(', ')}</div>` : '';
-    return `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
-      <div style="display:flex;justify-content:space-between;font-size:13px;">
-        <span>${label}</span><span style="color:${shift?'var(--text)':'var(--text-muted)'};">${shift ? shift.name+' · '+shift.timeIn+'–'+shift.timeOut : 'Off'}</span>
-      </div>
-      ${eventLine}
-    </div>`;
+    const d = new Date(ds+'T00:00:00');
+    return { ds, letter: DAY_LETTERS[d.getDay()], num: d.getDate() };
+  });
+  const hasEvents = days.some(d=>DB.events.some(e=>e.date===d.ds));
+  const eventsRow = hasEvents ? `<tr>
+    <td style="background:#FCE98C;font-weight:700;padding:4px 2px;font-size:8px;">EV</td>
+    ${days.map(d=>{
+      const evs = DB.events.filter(e=>e.date===d.ds);
+      return `<td style="background:#FCE98C;padding:3px 1px;font-size:7px;text-align:center;line-height:1.1;word-break:break-word;">${evs.map(e=>e.title).join(', ')||''}</td>`;
+    }).join('')}
+  </tr>` : '';
+  const headerRow = `<tr>
+    <th style="background:#C9C9C9;padding:4px 2px;font-size:9px;text-align:center;">STAFF</th>
+    ${days.map(d=>`<th style="background:#C9C9C9;padding:4px 1px;font-size:9px;line-height:1.2;">${d.letter}<br>${d.num}</th>`).join('')}
+  </tr>`;
+  const bodyRows = usersToShow.map(u=>{
+    const cells = days.map(d=>{
+      const shift = shiftForUserOnDate(u.id, d.ds);
+      const bg = shift ? shiftColorFor(shift.id) : DAYOFF_COLOR;
+      const text = shift ? `${formatTimeShort(shift.timeIn)}<br>${formatTimeShort(shift.timeOut)}` : 'OFF';
+      return `<td style="background:${bg};padding:4px 1px;font-size:9px;text-align:center;font-weight:700;color:#20261F;line-height:1.25;">${text}</td>`;
+    }).join('');
+    return `<tr><td style="background:#EEEDE6;padding:4px 2px;font-size:10px;font-weight:700;text-align:center;">${initials(u.name)}</td>${cells}</tr>`;
   }).join('');
+  return `<div style="border-radius:10px;border:1px solid var(--border);overflow:hidden;">
+    <table style="border-collapse:collapse;width:100%;table-layout:fixed;">
+      ${eventsRow}${headerRow}${bodyRows}
+    </table>
+  </div>`;
 }
 function openMyScheduleScreen(){ ui.screen='my-schedule'; ui.myScheduleWeekStart = dateStr(mondayOf(new Date())); render(); }
 function shiftMyScheduleWeek(delta){ ui.myScheduleWeekStart = addDays(ui.myScheduleWeekStart, delta*7); render(); }
@@ -1848,7 +1880,7 @@ function renderMySchedule(){
   const weekStart = ui.myScheduleWeekStart;
   const weekEnd = addDays(weekStart, 6);
   const weekLabel = new Date(weekStart+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + new Date(weekEnd+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
-  const rows = renderWeeklyScheduleRows(u.id, weekStart);
+  const table = renderScheduleTable([u], weekStart);
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">My Schedule</p></div></header>
   <div class="screen" style="padding-top:0;">
@@ -1857,7 +1889,7 @@ function renderMySchedule(){
       <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftMyScheduleWeek(1)">Next ›</button>
     </div>
-    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${table}
   </div>`;
 }
 function openTeamScheduleScreen(){ ui.screen='team-schedule'; ui.teamScheduleWeekStart = dateStr(mondayOf(new Date())); render(); }
@@ -1868,10 +1900,7 @@ function renderTeamSchedule(){
   const weekEnd = addDays(weekStart, 6);
   const weekLabel = new Date(weekStart+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + new Date(weekEnd+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
   const clockers = DB.users.filter(u=>!isOwner(u));
-  const sections = clockers.map(m=>{
-    const rows = renderWeeklyScheduleRows(m.id, weekStart);
-    return `<div class="section-title">${m.name} <span style="text-transform:capitalize;color:var(--text-muted);">(${m.role})</span></div><div class="card" style="padding:6px 16px;">${rows}</div>`;
-  }).join('');
+  const table = renderScheduleTable(clockers, weekStart);
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Team Schedule</p></div></header>
   <div class="screen" style="padding-top:0;">
@@ -1880,7 +1909,7 @@ function renderTeamSchedule(){
       <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftTeamScheduleWeek(1)">Next ›</button>
     </div>
-    ${sections || '<div class="empty-note">No staff or managers yet.</div>'}
+    ${clockers.length ? table : '<div class="empty-note">No staff or managers yet.</div>'}
   </div>`;
 }
 function renderProfile(){
@@ -1891,8 +1920,8 @@ function renderProfile(){
   let scheduleCard = '';
   if(!isOwner(u)){
     const weekStart = dateStr(mondayOf(new Date()));
-    const dayRows = renderWeeklyScheduleRows(u.id, weekStart);
-    scheduleCard = `<div class="section-title">Your schedule this week</div><div class="card" style="padding:6px 16px;">${dayRows}</div><button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openMyScheduleScreen()">View full schedule (more weeks) →</button>`;
+    const table = renderScheduleTable([u], weekStart);
+    scheduleCard = `<div class="section-title">Your schedule this week</div>${table}<button class="btn btn-secondary" style="margin:10px 0 16px;" onclick="openMyScheduleScreen()">View full schedule (more weeks) →</button>`;
   }
 
   const reportsCard = isOwner(u) ? `

@@ -151,6 +151,7 @@
 <input type="file" id="hidden-photo-input" accept="image/*" style="display:none" onchange="handleModalPhoto(event)" />
 <input type="file" id="hidden-attend-input" accept="image/*" capture="user" style="display:none" onchange="handleAttendancePhoto(event)" />
 <input type="file" id="hidden-recipe-csv-input" accept=".csv,text/csv" style="display:none" onchange="importRecipeCSV(event)" />
+<input type="file" id="hidden-inventory-csv-input" accept=".csv,text/csv" style="display:none" onchange="importInventoryCSV(event)" />
 
 <script>
 /* ---------- SUPABASE SETUP ----------
@@ -212,11 +213,11 @@ function saveLocal(key, val){
 }
 
 /* ---------- app state ---------- */
-let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[] };
+let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[] };
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
-  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null, teamScheduleWeekStart:null };
+  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null, teamScheduleWeekStart:null, salesReportDate:null };
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
 function currentUser(){ return DB.users.find(u=>u.id===session.userId) || null; }
@@ -254,9 +255,11 @@ async function init(){
   DB.checklistRuns = await loadShared('inv_checklistruns', []);
   DB.notes = await loadShared('inv_notes', []);
   DB.priorityChecks = await loadShared('inv_prioritychecks', []);
+  DB.salesReports = await loadShared('inv_salesreports', []);
   trimOldAttendance();
   trimOldAttendancePhotos();
   trimOldNotes();
+  trimOldSalesReports();
   session = await loadLocal('inv_session', {userId:null});
   ui.screen = (session.userId && currentUser()) ? 'main' : 'auth';
   render();
@@ -281,6 +284,7 @@ function persist(keys){
   if(keys.includes('checklistRuns')) saveShared('inv_checklistruns', DB.checklistRuns);
   if(keys.includes('notes')) saveShared('inv_notes', DB.notes);
   if(keys.includes('priorityChecks')) saveShared('inv_prioritychecks', DB.priorityChecks);
+  if(keys.includes('salesReports')) saveShared('inv_salesreports', DB.salesReports);
 }
 
 function logActivity(text){
@@ -600,7 +604,7 @@ function deleteChecklist(checklistId){
   render();
 }
 const ATTENDANCE_RETENTION_MS = 40*24*60*60*1000;
-const ATTENDANCE_PHOTO_RETENTION_MS = 10*24*60*60*1000;
+const ATTENDANCE_PHOTO_RETENTION_MS = 24*60*60*1000;
 function trimOldAttendance(){
   if(!DB.settings.autoTrimAttendance) return;
   const cutoff = Date.now() - ATTENDANCE_RETENTION_MS;
@@ -1282,6 +1286,63 @@ function importRecipeCSV(e){
   };
   reader.readAsText(file);
 }
+function downloadInventoryTemplate(){
+  downloadCSV('inventory-template.csv', ['Name','Category','Location','Brand','Unit','Starting Count','Low Stock Reminder','Usage'], [
+    ['Ground beef','Kitchen','Freezer','','kg','6','4','Burgers, tacos'],
+    ['Oat milk','Cafe counter','Under counter','Brand X','L','5','2','Lattes, cappuccinos'],
+  ]);
+}
+function importInventoryCSV(e){
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    const rows = parseCSV(ev.target.result);
+    if(rows.length<2){ showToast('No item rows found in that file'); return; }
+    const header = rows[0].map(h=>h.trim().toLowerCase());
+    const nameIdx = header.indexOf('name');
+    const catIdx = header.indexOf('category');
+    const locIdx = header.indexOf('location');
+    const brandIdx = header.indexOf('brand');
+    const unitIdx = header.indexOf('unit');
+    const qtyIdx = header.indexOf('starting count');
+    const lowIdx = header.indexOf('low stock reminder');
+    const usageIdx = header.indexOf('usage');
+    if(nameIdx===-1 || catIdx===-1){ showToast('CSV needs at least Name and Category columns'); return; }
+    let count = 0;
+    for(let i=1;i<rows.length;i++){
+      const r = rows[i];
+      const name = (r[nameIdx]||'').trim();
+      if(!name) continue;
+      const catName = (r[catIdx]||'').trim();
+      if(!catName) continue;
+      let loc = DB.locations.find(l=>l.name.toLowerCase()===catName.toLowerCase());
+      if(!loc){ loc = {id:uid('loc'), name:catName, subs:[]}; DB.locations.push(loc); }
+      const subName = locIdx>-1 ? (r[locIdx]||'').trim() : '';
+      let sub;
+      if(subName){
+        sub = loc.subs.find(s=>s.name.toLowerCase()===subName.toLowerCase());
+        if(!sub){ sub = {id:uid('sub'), name:subName}; loc.subs.push(sub); }
+      } else {
+        if(!loc.subs.length){ sub = {id:uid('sub'), name:'General'}; loc.subs.push(sub); }
+        else sub = loc.subs[0];
+      }
+      const brand = brandIdx>-1 ? (r[brandIdx]||'').trim() : '';
+      const unit = (unitIdx>-1 ? (r[unitIdx]||'').trim() : '') || 'pcs';
+      const qty = qtyIdx>-1 ? (parseFloat(r[qtyIdx])||0) : 0;
+      const low = lowIdx>-1 ? (parseFloat(r[lowIdx])||0) : 0;
+      const usage = usageIdx>-1 ? (r[usageIdx]||'').trim() : '';
+      DB.items.push({id:uid('it'), locId:loc.id, subId:sub.id, name, brand, photo:null, usage, unit, qty, low, urgent:0, pinned:false});
+      count++;
+    }
+    persist(['items','locations']);
+    logActivity(`imported ${count} item(s) from CSV`);
+    showToast(`Imported ${count} item(s)`);
+    render();
+  };
+  reader.readAsText(file);
+}
 
 /* ---------- team actions ---------- */
 function generateInvite(){
@@ -1357,8 +1418,8 @@ function render(){
   if(ui.screen==='activity'){ body = renderActivityLog(); app.innerHTML = body; return; }
   if(ui.screen==='wastage-log'){ body = renderWastageLog(); app.innerHTML = body; return; }
   if(ui.screen==='attendance-report'){ body = renderAttendanceReport(); app.innerHTML = body; return; }
-  if(ui.screen==='attendance-person'){ body = renderAttendancePerson(); app.innerHTML = body; return; }
-  if(ui.screen==='attendance-today'){ body = renderAttendanceToday(); app.innerHTML = body; return; }
+  if(ui.screen==='attendance-person'){ body = renderAttendancePerson(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='attendance-today'){ body = renderAttendanceToday(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='alert-list'){ body = renderAlertList(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='manage-locations'){ body = renderManageLocations(); app.innerHTML = body; return; }
   if(ui.screen==='attendance-policy'){ body = renderAttendancePolicy(); app.innerHTML = body + renderModal(); return; }
@@ -1374,6 +1435,10 @@ function render(){
   if(ui.screen==='checklist-manage'){ body = renderChecklistManage(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='checklist-edit'){ body = renderChecklistEdit(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='oil-log'){ body = renderOilLog(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='sales-report'){ body = renderSalesReport(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='sales-expenses'){ body = renderSalesExpenses(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='sales-cashdrawer'){ body = renderSalesCashDrawer(); app.innerHTML = body; return; }
+  if(ui.screen==='sales-online'){ body = renderSalesOnline(); app.innerHTML = body + renderModal(); return; }
   if(ui.tab==='home') body = renderHome();
   else if(ui.tab==='stock') body = renderStock();
   else if(ui.tab==='recipes') body = renderRecipes();
@@ -1501,13 +1566,15 @@ function renderHome(){
   const actionButtons = isOwner(u) ? '' : `
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-    <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openWastageModal()">🗑 Report wastage</button>`;
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
+    <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
   if(isOwner(u)){
     return `
     <header class="topbar"><div><p class="greet">Hi, ${u.name.split(' ')[0]}</p><p class="greet-sub">Inventory at a glance</p></div></header>
     <div class="screen" style="padding-top:0;">
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openTeamScheduleScreen()">📅 View Team Schedule</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       ${eventsCard}
       ${renderNotesCard()}
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openAttendanceTodayScreen()">🕒 Today's Time In/Out</button>
@@ -1628,6 +1695,7 @@ function renderStock(){
   </header>
   <div class="screen" style="padding-top:0;">
     <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="openOilLogScreen()">🛢 Cooking Oil Reporting</button>
+    ${isMgr(u) ? `<div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="document.getElementById('hidden-inventory-csv-input').click()">Import CSV</button><button class="btn btn-secondary" onclick="downloadInventoryTemplate()">Download template</button></div>` : ''}
     <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
     ${subChips}
@@ -1793,7 +1861,7 @@ function renderAttendancePerson(){
         <p class="activity-text">${a.type==='in'?'Time in':'Time out'} ${late?'<span class="badge badge-low" style="margin-left:6px;">Late</span>':''}</p>
         <p class="activity-time">${new Date(a.ts).toLocaleString()}</p>
       </div>
-      ${a.photo ? `<img src="${a.photo}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;" />` : ''}
+      ${a.photo ? `<img src="${a.photo}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:pointer;" onclick="openAttendancePhotoModal('${a.id}')" />` : ''}
     </div>`;
   }).join('') : `<div class="empty-note">No time in/out recorded yet.</div>`;
   return `
@@ -1812,7 +1880,7 @@ function renderAttendanceToday(){
         <p class="activity-text"><strong>${user?user.name:'Unknown'}</strong> — ${a.type==='in'?'Time in':'Time out'} ${late?'<span class="badge badge-low" style="margin-left:6px;">Late</span>':''}</p>
         <p class="activity-time">${new Date(a.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</p>
       </div>
-      ${a.photo ? `<img src="${a.photo}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;" />` : ''}
+      ${a.photo ? `<img src="${a.photo}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:pointer;" onclick="openAttendancePhotoModal('${a.id}')" />` : ''}
     </div>`;
   }).join('') : `<div class="empty-note">No one has clocked in yet today.</div>`;
   const signedInIds = new Set(today.filter(a=>a.type==='in').map(a=>a.userId));
@@ -1822,6 +1890,24 @@ function renderAttendanceToday(){
   <div class="screen" style="padding-top:0;">
     <div class="card">${rows}</div>
     ${notYet.length ? `<div class="section-title">Not yet signed in today</div><div class="card"><p style="font-size:13px;margin:0;">${notYet.map(u=>u.name).join(', ')}</p></div>` : ''}
+  </div>`;
+}
+function openAttendancePhotoModal(attId){
+  ui.modal = {type:'attendance-photo', attId};
+  render();
+}
+function renderAttendancePhotoModal(){
+  const a = DB.attendance.find(x=>x.id===ui.modal.attId);
+  if(!a) return '';
+  const user = DB.users.find(u=>u.id===a.userId);
+  const late = a.type==='in' && isRecordLate(a);
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet" style="padding:20px 20px 24px;">
+      <img src="${a.photo}" style="width:100%;border-radius:14px;display:block;margin-bottom:14px;object-fit:contain;background:#000;" />
+      <p style="margin:0;font-size:15px;font-weight:600;">${user?user.name:(a.userName||'Unknown')} — ${a.type==='in'?'Time in':'Time out'} ${late?'<span class="badge badge-low" style="margin-left:6px;">Late</span>':''}</p>
+      <p style="margin:2px 0 16px;font-size:12px;color:var(--text-muted);">${new Date(a.ts).toLocaleString()}</p>
+      <button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>
+    </div>
   </div>`;
 }
 
@@ -1981,6 +2067,11 @@ function renderModal(){
   if(ui.modal.type==='checklist-task-form') return renderTaskFormModal();
   if(ui.modal.type==='checklist-new') return renderNewChecklistModal();
   if(ui.modal.type==='phone-form') return renderPhoneModal();
+  if(ui.modal.type==='expense-form') return renderExpenseFormModal();
+  if(ui.modal.type==='online-form') return renderOnlineFormModal();
+  if(ui.modal.type==='cashfunds-form') return renderCashFundsModal();
+  if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
+  if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
   return '';
 }
 
@@ -2003,7 +2094,7 @@ function renderAttendancePolicy(){
         <button class="btn ${DB.settings.autoTrimAttendance?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimAttendance()">${DB.settings.autoTrimAttendance?'On':'Off'}</button>
       </div>
       <button class="btn btn-secondary" onclick="manualTrimAttendance()">Clear records older than 40 days now</button>
-      <p style="font-size:11px;color:var(--text-muted);margin:10px 0 0;">Time in/out photos are always removed automatically after 10 days, regardless of this setting, to keep the database small.</p>
+      <p style="font-size:11px;color:var(--text-muted);margin:10px 0 0;">Time in/out photos are always removed automatically after 1 day, regardless of this setting, to keep the database small.</p>
     </div>` : '';
   const shiftCount = DB.shifts.length;
   return `
@@ -2661,6 +2752,358 @@ function renderPhoneModal(){
       </div>
     </div>
   </div>`;
+}
+
+/* ---------- daily sales report ---------- */
+const CASH_DENOMS = [1000,500,200,100,50,20,10,5,1];
+function peso(n){ return '₱' + (Math.round((n||0)*100)/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function findSalesReport(date){ return DB.salesReports.find(r=>r.date===date); }
+function ensureSalesReport(date){
+  let r = findSalesReport(date);
+  if(!r){
+    r = { id:uid('sr'), date, cashFunds:0, expenses:[], online:[], cashDrawer:{} };
+    CASH_DENOMS.forEach(d=>r.cashDrawer[d]=0);
+    DB.salesReports.push(r);
+  }
+  if(!r.cashDrawer) r.cashDrawer = {};
+  CASH_DENOMS.forEach(d=>{ if(r.cashDrawer[d]==null) r.cashDrawer[d]=0; });
+  if(!r.expenses) r.expenses = [];
+  if(!r.online) r.online = [];
+  return r;
+}
+function expensesTotal(r){ return r.expenses.reduce((s,e)=>s+e.amount,0); }
+function cashDrawerTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashDrawer[d]||0),0); }
+function onlineSalesTotal(r){ return r.online.reduce((s,e)=>s+e.amount,0); }
+function isSalesReportEditable(date){
+  const u = currentUser();
+  return !isOwner(u) && date===dateStr(new Date());
+}
+
+function openSalesReportScreen(){
+  ui.screen = 'sales-report';
+  ui.salesReportDate = dateStr(new Date());
+  render();
+}
+function backToSalesReport(){ flushSalesDrawerSave(); ui.screen='sales-report'; render(); }
+function shiftSalesReportDate(delta){
+  const today = dateStr(new Date());
+  const next = addDays(ui.salesReportDate, delta);
+  if(next > today) return;
+  ui.salesReportDate = next;
+  render();
+}
+
+function renderSalesReport(){
+  const u = currentUser();
+  const date = ui.salesReportDate || dateStr(new Date());
+  ui.salesReportDate = date;
+  const today = dateStr(new Date());
+  const editable = isSalesReportEditable(date);
+  const existing = findSalesReport(date);
+  const r = (existing || editable) ? ensureSalesReport(date) : null;
+  const dateLabel = new Date(date+'T00:00:00').toLocaleDateString([], {weekday:'long', month:'short', day:'numeric'});
+  const dateNav = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftSalesReportDate(-1)">‹ Prev</button>
+      <p style="font-size:13px;font-weight:600;margin:0;">${dateLabel}${date===today?' (Today)':''}</p>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;${date>=today?'opacity:0.4;pointer-events:none;':''}" onclick="shiftSalesReportDate(1)">Next ›</button>
+    </div>`;
+  const autoTrimOn = DB.settings.autoTrimSalesReports !== false;
+  const ownerActions = isOwner(u) ? `
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;font-size:11px;" onclick="openSalesDownloadModal()">⬇ Download report</button>
+      ${existing ? `<button class="btn btn-secondary" style="width:auto;padding:6px 10px;font-size:11px;color:var(--urgent);" onclick="deleteSalesReport()">🗑 Delete report</button>` : ''}
+    </div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete after 30 days</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Automatically remove sales reports older than 30 days</p></div>
+      <button class="btn ${autoTrimOn?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimSalesReports()">${autoTrimOn?'On':'Off'}</button>
+    </div>` : '';
+
+  if(!r){
+    return `
+    <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Daily Sales Report</p></div></header>
+    <div class="screen" style="padding-top:0;">
+      ${dateNav}
+      ${ownerActions}
+      <div class="empty-note">No sales report was submitted for this date.</div>
+    </div>`;
+  }
+
+  const cashSales = cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+  const totalSales = cashSales + onlineSalesTotal(r);
+
+  const rows = `
+    <div class="team-row" onclick="openSalesExpensesScreen()">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">💸 Daily Expenses</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.expenses.length} item${r.expenses.length===1?'':'s'}</p></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(expensesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
+    </div>
+    <div class="team-row" onclick="openSalesCashDrawerScreen()">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">💵 Total Cash Drawer</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Counted cash on hand</p></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(cashDrawerTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
+    </div>
+    <div class="team-row" onclick="openSalesOnlineScreen()">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">📱 Online Sales</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.online.length} entr${r.online.length===1?'y':'ies'}</p></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(onlineSalesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
+    </div>
+    <div class="team-row" ${editable?`onclick="openCashFundsModal()"`:''}>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">🌅 Cash Funds (morning)</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Starting cash in drawer</p></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(r.cashFunds)}</span>${editable?'<span style="color:var(--text-muted);">›</span>':''}</div>
+    </div>`;
+
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Daily Sales Report</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    ${dateNav}
+    ${ownerActions}
+    <div class="card" style="background:var(--accent-light);margin-bottom:14px;">
+      <p style="margin:0 0 4px;font-size:12px;color:var(--accent);font-weight:600;">TOTAL SALES</p>
+      <p style="margin:0;font-size:24px;font-weight:700;color:var(--accent);">${peso(totalSales)}</p>
+      <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Cash sales ${peso(cashSales)} + Online ${peso(onlineSalesTotal(r))}</p>
+    </div>
+    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${!editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">${date===today?'View only.':'Past reports are view only.'}</p>` : ''}
+  </div>`;
+}
+
+function openSalesDownloadModal(){
+  const date = ui.salesReportDate || dateStr(new Date());
+  ui.modal = {type:'sales-download-form', from: addDays(date, -6), to: date};
+  render();
+}
+function renderSalesDownloadModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Download sales report</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">Choose the date range to include.</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>From</label><input id="sr-from" type="date" value="${ui.modal.from}" /></div>
+        <div class="field" style="flex:1;"><label>To</label><input id="sr-to" type="date" value="${ui.modal.to}" /></div>
+      </div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="downloadSalesReportRangeCSV()">Download</button>
+      </div>
+    </div>
+  </div>`;
+}
+function downloadSalesReportRangeCSV(){
+  const from = document.getElementById('sr-from').value;
+  const to = document.getElementById('sr-to').value;
+  if(!from || !to){ showToast('Pick both dates'); return; }
+  if(from > to){ showToast('"From" date must be before "To" date'); return; }
+  const reports = DB.salesReports.filter(r=>r.date>=from && r.date<=to).sort((a,b)=>a.date.localeCompare(b.date));
+  if(!reports.length){ showToast('No sales reports in that date range'); return; }
+  const rows = [];
+  let gCashFunds=0, gDrawer=0, gExpenses=0, gOnline=0, gCashSales=0, gTotal=0;
+  reports.forEach(r=>{
+    const cashSales = cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+    const total = cashSales + onlineSalesTotal(r);
+    rows.push([r.date, r.cashFunds||0, cashDrawerTotal(r), expensesTotal(r), onlineSalesTotal(r), cashSales, total]);
+    gCashFunds += r.cashFunds||0; gDrawer += cashDrawerTotal(r); gExpenses += expensesTotal(r); gOnline += onlineSalesTotal(r); gCashSales += cashSales; gTotal += total;
+  });
+  rows.push(['TOTAL', gCashFunds, gDrawer, gExpenses, gOnline, gCashSales, gTotal]);
+  downloadCSV(`sales-report-${from}_to_${to}.csv`, ['Date','Cash Funds','Cash Drawer Total','Expenses Total','Online Sales Total','Cash Sales','Total Sales'], rows);
+  closeModal();
+}
+
+function deleteSalesReport(){
+  const date = ui.salesReportDate;
+  if(!confirm(`Delete the sales report for ${date}? This cannot be undone.`)) return;
+  DB.salesReports = DB.salesReports.filter(r=>r.date!==date);
+  persist(['salesReports']);
+  logActivity(`deleted the sales report for ${date}`);
+  showToast('Sales report deleted');
+  render();
+}
+
+const SALES_REPORT_RETENTION_MS = 30*24*60*60*1000;
+function trimOldSalesReports(){
+  if(DB.settings.autoTrimSalesReports === false) return;
+  const cutoff = dateStr(new Date(Date.now() - SALES_REPORT_RETENTION_MS));
+  const before = DB.salesReports.length;
+  DB.salesReports = DB.salesReports.filter(r=>r.date >= cutoff);
+  if(DB.salesReports.length !== before) persist(['salesReports']);
+}
+function toggleAutoTrimSalesReports(){
+  DB.settings.autoTrimSalesReports = (DB.settings.autoTrimSalesReports===false) ? true : false;
+  persist(['settings']);
+  if(DB.settings.autoTrimSalesReports) trimOldSalesReports();
+  render();
+}
+
+function openSalesExpensesScreen(){ ui.screen='sales-expenses'; render(); }
+function renderSalesExpenses(){
+  const date = ui.salesReportDate;
+  const r = ensureSalesReport(date);
+  const editable = isSalesReportEditable(date);
+  const rows = r.expenses.length ? r.expenses.map(e=>`
+    <div class="activity-row" style="display:flex;justify-content:space-between;align-items:center;">
+      <p class="activity-text">${e.desc}</p>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:13px;font-weight:600;">${peso(e.amount)}</span>
+        ${editable ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteExpense('${e.id}')">✕</button>` : ''}
+      </div>
+    </div>`).join('') : `<div class="empty-note">No expenses logged yet.</div>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Daily Expenses</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL EXPENSES</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(expensesTotal(r))}</p></div>
+    <div class="card">${rows}</div>
+    ${editable ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openExpenseFormModal()">+ Add expense</button>` : ''}
+  </div>`;
+}
+function openExpenseFormModal(){ ui.modal={type:'expense-form'}; render(); }
+function renderExpenseFormModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Add expense</p>
+      <div class="field"><label>What was it for?</label><input id="exp-desc" placeholder="e.g. Gas refill, delivery fee" /></div>
+      <div class="field"><label>Amount</label><input id="exp-amount" type="number" step="0.01" placeholder="0.00" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveExpense()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveExpense(){
+  const desc = document.getElementById('exp-desc').value.trim();
+  const amount = parseFloat(document.getElementById('exp-amount').value)||0;
+  if(!desc){ showToast('Describe the expense'); return; }
+  if(amount<=0){ showToast('Enter an amount'); return; }
+  const r = ensureSalesReport(ui.salesReportDate);
+  const u = currentUser();
+  r.expenses.push({id:uid('exp'), desc, amount, addedBy:u.name});
+  persist(['salesReports']);
+  logActivity(`logged expense "${desc}" (${peso(amount)}) in daily sales report`);
+  closeModal();
+}
+function deleteExpense(id){
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.expenses = r.expenses.filter(e=>e.id!==id);
+  persist(['salesReports']);
+  render();
+}
+
+function openSalesCashDrawerScreen(){ ui.screen='sales-cashdrawer'; render(); }
+function renderSalesCashDrawer(){
+  const date = ui.salesReportDate;
+  const r = ensureSalesReport(date);
+  const editable = isSalesReportEditable(date);
+  const rows = CASH_DENOMS.map(d=>{
+    const count = r.cashDrawer[d]||0;
+    const sub = d*count;
+    return `<div class="team-row">
+      <p style="font-size:13px;font-weight:600;margin:0;width:64px;">₱${d}</p>
+      ${editable
+        ? `<input id="cash-${d}" type="number" min="0" step="1" value="${count}" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setCashDrawerCount(${d}, this)" />`
+        : `<span style="font-size:13px;">${count} pc${count===1?'':'s'}</span>`}
+      <span style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
+    </div>`;
+  }).join('');
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Total Cash Drawer</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL IN DRAWER</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(cashDrawerTotal(r))}</p></div>
+    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Enter how many bills/coins of each denomination are in the drawer.</p>` : ''}
+  </div>`;
+}
+let salesDrawerSaveTimer = null;
+function flushSalesDrawerSave(){
+  if(salesDrawerSaveTimer){ clearTimeout(salesDrawerSaveTimer); salesDrawerSaveTimer=null; persist(['salesReports']); }
+}
+function setCashDrawerCount(denom, el){
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.cashDrawer[denom] = Math.max(0, parseInt(el.value)||0);
+  render();
+  const newEl = document.getElementById('cash-'+denom);
+  if(newEl) newEl.focus();
+  clearTimeout(salesDrawerSaveTimer);
+  salesDrawerSaveTimer = setTimeout(()=>{ salesDrawerSaveTimer=null; persist(['salesReports']); }, 600);
+}
+window.addEventListener('beforeunload', flushSalesDrawerSave);
+
+function openSalesOnlineScreen(){ ui.screen='sales-online'; render(); }
+function renderSalesOnline(){
+  const date = ui.salesReportDate;
+  const r = ensureSalesReport(date);
+  const editable = isSalesReportEditable(date);
+  const rows = r.online.length ? r.online.map(e=>`
+    <div class="activity-row" style="display:flex;justify-content:space-between;align-items:center;">
+      <p class="activity-text">${e.type}</p>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:13px;font-weight:600;">${peso(e.amount)}</span>
+        ${editable ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteOnlineSale('${e.id}')">✕</button>` : ''}
+      </div>
+    </div>`).join('') : `<div class="empty-note">No online sales logged yet.</div>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Online Sales</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL ONLINE SALES</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(onlineSalesTotal(r))}</p></div>
+    <div class="card">${rows}</div>
+    ${editable ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openOnlineFormModal()">+ Add online sale</button>` : ''}
+  </div>`;
+}
+function openOnlineFormModal(){ ui.modal={type:'online-form'}; render(); }
+function renderOnlineFormModal(){
+  const platforms = ['GrabFood','FoodPanda','GCash','Maya','GoTyme','Credit Card','Bank Transfer','Other'];
+  const opts = platforms.map(p=>`<option value="${p}">${p}</option>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Add online sale</p>
+      <div class="field"><label>Type</label><select id="onl-type">${opts}</select></div>
+      <div class="field"><label>Amount</label><input id="onl-amount" type="number" step="0.01" placeholder="0.00" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveOnlineSale()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveOnlineSale(){
+  const type = document.getElementById('onl-type').value;
+  const amount = parseFloat(document.getElementById('onl-amount').value)||0;
+  if(amount<=0){ showToast('Enter an amount'); return; }
+  const r = ensureSalesReport(ui.salesReportDate);
+  const u = currentUser();
+  r.online.push({id:uid('onl'), type, amount, addedBy:u.name});
+  persist(['salesReports']);
+  logActivity(`logged ${peso(amount)} online sale (${type}) in daily sales report`);
+  closeModal();
+}
+function deleteOnlineSale(id){
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.online = r.online.filter(e=>e.id!==id);
+  persist(['salesReports']);
+  render();
+}
+
+function openCashFundsModal(){
+  const r = ensureSalesReport(ui.salesReportDate);
+  ui.modal = {type:'cashfunds-form', value:r.cashFunds||0};
+  render();
+}
+function renderCashFundsModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Cash Funds (morning)</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">How much cash was in the drawer at the start of the day?</p>
+      <div class="field"><label>Amount</label><input id="cf-amount" type="number" step="0.01" value="${ui.modal.value}" placeholder="0.00" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveCashFunds()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveCashFunds(){
+  const amount = parseFloat(document.getElementById('cf-amount').value)||0;
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.cashFunds = amount;
+  persist(['salesReports']);
+  logActivity(`set cash funds to ${peso(amount)} in daily sales report`);
+  closeModal();
 }
 
 init();

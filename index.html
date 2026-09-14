@@ -217,7 +217,7 @@ let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[]
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
-  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null, teamScheduleWeekStart:null, salesReportDate:null };
+  selectedStaffId:null, scheduleUserId:null, recipeCat:'all', scheduleWeekStart:null, alertFilter:null, activeChecklistId:null, recipeSearch:'', priorityCat:'all', myScheduleWeekStart:null, teamScheduleWeekStart:null, salesReportDate:null, payrollWeekStart:null };
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
 function currentUser(){ return DB.users.find(u=>u.id===session.userId) || null; }
@@ -260,6 +260,7 @@ async function init(){
   trimOldAttendancePhotos();
   trimOldNotes();
   trimOldSalesReports();
+  trimOldChecklistRuns();
   session = await loadLocal('inv_session', {userId:null});
   ui.screen = (session.userId && currentUser()) ? 'main' : 'auth';
   render();
@@ -531,6 +532,20 @@ function runForToday(checklistId){
   return run;
 }
 function openChecklistHub(){ ui.screen='checklist-hub'; render(); }
+const CHECKLIST_RUN_RETENTION_MS = 2*24*60*60*1000;
+function trimOldChecklistRuns(){
+  if(DB.settings.autoTrimChecklistRuns === false) return;
+  const cutoff = dateStr(new Date(Date.now() - CHECKLIST_RUN_RETENTION_MS));
+  const before = DB.checklistRuns.length;
+  DB.checklistRuns = DB.checklistRuns.filter(r=>r.date >= cutoff);
+  if(DB.checklistRuns.length !== before) persist(['checklistRuns']);
+}
+function toggleAutoTrimChecklistRuns(){
+  DB.settings.autoTrimChecklistRuns = (DB.settings.autoTrimChecklistRuns===false) ? true : false;
+  persist(['settings']);
+  if(DB.settings.autoTrimChecklistRuns) trimOldChecklistRuns();
+  render();
+}
 function openChecklistRun(checklistId){ ui.screen='checklist-run'; ui.activeChecklistId=checklistId; render(); }
 function toggleChecklistTask(checklistId, taskId){
   const run = runForToday(checklistId);
@@ -1439,6 +1454,10 @@ function render(){
   if(ui.screen==='sales-expenses'){ body = renderSalesExpenses(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='sales-cashdrawer'){ body = renderSalesCashDrawer(); app.innerHTML = body; return; }
   if(ui.screen==='sales-online'){ body = renderSalesOnline(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='morning-cash-count'){ body = renderMorningCashCount(); app.innerHTML = body; return; }
+  if(ui.screen==='payroll-hours'){ body = renderPayrollHours(); app.innerHTML = body; return; }
+  if(ui.screen==='sales-trends'){ body = renderSalesTrends(); app.innerHTML = body; return; }
+  if(ui.screen==='wastage-trends'){ body = renderWastageTrends(); app.innerHTML = body; return; }
   if(ui.tab==='home') body = renderHome();
   else if(ui.tab==='stock') body = renderStock();
   else if(ui.tab==='recipes') body = renderRecipes();
@@ -1563,7 +1582,10 @@ function renderHome(){
     </div>`;
   }).join('') : `<div class="empty-note">Everything is well stocked.</div>`;
 
+  const todayReport = findSalesReport(dateStr(new Date()));
+  const cashCountDone = todayReport && todayReport.cashFundsBy;
   const actionButtons = isOwner(u) ? '' : `
+    <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Morning Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
@@ -1595,8 +1617,8 @@ function renderHome(){
     ${myScheduleBtn}
     ${boostCard}
     ${eventsCard}
-    ${renderNotesCard()}
     ${actionButtons}
+    ${renderNotesCard()}
     ${statRow}
     <div class="section-title">Needs attention</div>
     <div class="card" style="padding:6px 12px;">${attentionRows}</div>
@@ -2013,9 +2035,13 @@ function renderProfile(){
   const reportsCard = isOwner(u) ? `
     <div class="section-title">Reports</div>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openAttendanceReportScreen()">View time in/out report</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openPayrollHoursScreen()">Hours &amp; payroll</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSalesTrendsScreen()">Sales trends</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageTrendsScreen()">Wastage trends</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openActivityScreen()">Activity log</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageLogScreen()">Wastage log</button>
-    <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openSecurityLogScreen()">Security log</button>` : '';
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSecurityLogScreen()">Security log</button>
+    <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="backupAllData()">⬇ Backup all data</button>` : '';
 
   return `
   <header class="topbar"><p class="greet">Profile</p></header>
@@ -2069,7 +2095,6 @@ function renderModal(){
   if(ui.modal.type==='phone-form') return renderPhoneModal();
   if(ui.modal.type==='expense-form') return renderExpenseFormModal();
   if(ui.modal.type==='online-form') return renderOnlineFormModal();
-  if(ui.modal.type==='cashfunds-form') return renderCashFundsModal();
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
   return '';
@@ -2555,10 +2580,17 @@ function renderChecklistHub(){
       <div style="display:flex;align-items:center;">${editBtn}<span style="color:var(--text-muted);">›</span></div>
     </div>`;
   }).join('');
+  const autoTrimOn = DB.settings.autoTrimChecklistRuns !== false;
+  const retentionHtml = isOwner(u) ? `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete checklist history</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Removes completed checklist records older than 2 days. Today's progress always shows.</p></div>
+      <button class="btn ${autoTrimOn?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimChecklistRuns()">${autoTrimOn?'On':'Off'}</button>
+    </div>` : '';
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Checklists</p></div></header>
   <div class="screen" style="padding-top:0;">
     <div class="card">${rows || '<div class="empty-note">No checklists set up yet.</div>'}</div>
+    ${retentionHtml}
   </div>`;
 }
 function renderChecklistRun(){
@@ -2761,22 +2793,35 @@ function findSalesReport(date){ return DB.salesReports.find(r=>r.date===date); }
 function ensureSalesReport(date){
   let r = findSalesReport(date);
   if(!r){
-    r = { id:uid('sr'), date, cashFunds:0, expenses:[], online:[], cashDrawer:{} };
-    CASH_DENOMS.forEach(d=>r.cashDrawer[d]=0);
+    r = { id:uid('sr'), date, cashFunds:0, expenses:[], online:[], cashDrawer:{}, cashFundsBreakdown:{} };
+    CASH_DENOMS.forEach(d=>{ r.cashDrawer[d]=0; r.cashFundsBreakdown[d]=0; });
     DB.salesReports.push(r);
   }
   if(!r.cashDrawer) r.cashDrawer = {};
   CASH_DENOMS.forEach(d=>{ if(r.cashDrawer[d]==null) r.cashDrawer[d]=0; });
+  if(!r.cashFundsBreakdown) r.cashFundsBreakdown = {};
+  CASH_DENOMS.forEach(d=>{ if(r.cashFundsBreakdown[d]==null) r.cashFundsBreakdown[d]=0; });
   if(!r.expenses) r.expenses = [];
   if(!r.online) r.online = [];
   return r;
 }
 function expensesTotal(r){ return r.expenses.reduce((s,e)=>s+e.amount,0); }
 function cashDrawerTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashDrawer[d]||0),0); }
+function cashFundsBreakdownTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashFundsBreakdown[d]||0),0); }
 function onlineSalesTotal(r){ return r.online.reduce((s,e)=>s+e.amount,0); }
 function isSalesReportEditable(date){
   const u = currentUser();
-  return !isOwner(u) && date===dateStr(new Date());
+  if(isOwner(u) || date!==dateStr(new Date())) return false;
+  const r = findSalesReport(date);
+  if(r && r.reportLocked) return false;
+  return true;
+}
+function isMorningCashEditable(date){
+  const u = currentUser();
+  if(isOwner(u) || date!==dateStr(new Date())) return false;
+  const r = findSalesReport(date);
+  if(r && (r.morningCashLocked || r.reportLocked)) return false;
+  return true;
 }
 
 function openSalesReportScreen(){
@@ -2838,17 +2883,24 @@ function renderSalesReport(){
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(expensesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
     <div class="team-row" onclick="openSalesCashDrawerScreen()">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">💵 Total Cash Drawer</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Counted cash on hand</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">💵 Total Cash Drawer</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${(r.expectedCashSales!=null) ? (Math.abs((cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))-r.expectedCashSales)<1 ? '✅ Matches expected' : `⚠️ ${(cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))<r.expectedCashSales?'Short':'Over'} vs expected`) : 'Counted cash on hand'}</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(cashDrawerTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
     <div class="team-row" onclick="openSalesOnlineScreen()">
       <div><p style="font-size:13px;font-weight:600;margin:0;">📱 Online Sales</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.online.length} entr${r.online.length===1?'y':'ies'}</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(onlineSalesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
-    <div class="team-row" ${editable?`onclick="openCashFundsModal()"`:''}>
+    <div class="team-row" onclick="openMorningCashCountScreen(true)">
       <div><p style="font-size:13px;font-weight:600;margin:0;">🌅 Cash Funds (morning)</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Starting cash in drawer</p></div>
-      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(r.cashFunds)}</span>${editable?'<span style="color:var(--text-muted);">›</span>':''}</div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(r.cashFunds)}</span><span style="color:var(--text-muted);">›</span></div>
     </div>`;
+
+  const submitReportBtn = editable ? `<button class="btn" style="margin-top:14px;background:#2F8F4E;" onclick="submitSalesReport()">✅ Submit Daily Sales Report</button>` : '';
+  const lockedBanner = r.reportLocked ? `
+    <div class="card" style="background:var(--accent-light);margin-top:14px;">
+      <p style="margin:0;font-size:12px;font-weight:600;color:var(--accent);">✅ SUBMITTED — LOCKED</p>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">${r.reportLockedBy?`Submitted by ${r.reportLockedBy} at ${new Date(r.reportLockedAt).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}. `:''}This report can no longer be edited.</p>
+    </div>` : '';
 
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Daily Sales Report</p></div></header>
@@ -2861,7 +2913,9 @@ function renderSalesReport(){
       <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Cash sales ${peso(cashSales)} + Online ${peso(onlineSalesTotal(r))}</p>
     </div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
-    ${!editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">${date===today?'View only.':'Past reports are view only.'}</p>` : ''}
+    ${!editable && !r.reportLocked ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">${date===today?'View only.':'Past reports are view only.'}</p>` : ''}
+    ${submitReportBtn}
+    ${lockedBanner}
   </div>`;
 }
 
@@ -2915,6 +2969,21 @@ function deleteSalesReport(){
   showToast('Sales report deleted');
   render();
 }
+function submitSalesReport(){
+  flushSalesDrawerSave();
+  const date = ui.salesReportDate;
+  const r = ensureSalesReport(date);
+  if(!confirm('Are you sure this is correct and true? Once submitted, you won\'t be able to edit this report.')) return;
+  const u = currentUser();
+  r.reportLocked = true;
+  r.morningCashLocked = true;
+  r.reportLockedBy = u.name;
+  r.reportLockedAt = Date.now();
+  persist(['salesReports']);
+  logActivity(`submitted the final daily sales report for ${date} (${peso((cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))+onlineSalesTotal(r))})`);
+  showToast('Daily sales report submitted');
+  render();
+}
 
 const SALES_REPORT_RETENTION_MS = 30*24*60*60*1000;
 function trimOldSalesReports(){
@@ -2938,7 +3007,7 @@ function renderSalesExpenses(){
   const editable = isSalesReportEditable(date);
   const rows = r.expenses.length ? r.expenses.map(e=>`
     <div class="activity-row" style="display:flex;justify-content:space-between;align-items:center;">
-      <p class="activity-text">${e.desc}</p>
+      <div><p class="activity-text" style="margin:0;">${e.desc}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${e.cat||'Other'}</p></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:13px;font-weight:600;">${peso(e.amount)}</span>
         ${editable ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteExpense('${e.id}')">✕</button>` : ''}
@@ -2953,11 +3022,14 @@ function renderSalesExpenses(){
   </div>`;
 }
 function openExpenseFormModal(){ ui.modal={type:'expense-form'}; render(); }
+const EXPENSE_CATEGORIES = ['Supplies','Utilities','Rent','Gas/Delivery','Staff meals','Repairs','Other'];
 function renderExpenseFormModal(){
+  const opts = EXPENSE_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('');
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
     <div class="modal-sheet">
       <p class="modal-title">Add expense</p>
       <div class="field"><label>What was it for?</label><input id="exp-desc" placeholder="e.g. Gas refill, delivery fee" /></div>
+      <div class="field"><label>Category</label><select id="exp-cat">${opts}</select></div>
       <div class="field"><label>Amount</label><input id="exp-amount" type="number" step="0.01" placeholder="0.00" /></div>
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -2968,12 +3040,13 @@ function renderExpenseFormModal(){
 }
 function saveExpense(){
   const desc = document.getElementById('exp-desc').value.trim();
+  const cat = document.getElementById('exp-cat').value;
   const amount = parseFloat(document.getElementById('exp-amount').value)||0;
   if(!desc){ showToast('Describe the expense'); return; }
   if(amount<=0){ showToast('Enter an amount'); return; }
   const r = ensureSalesReport(ui.salesReportDate);
   const u = currentUser();
-  r.expenses.push({id:uid('exp'), desc, amount, addedBy:u.name});
+  r.expenses.push({id:uid('exp'), desc, cat, amount, addedBy:u.name});
   persist(['salesReports']);
   logActivity(`logged expense "${desc}" (${peso(amount)}) in daily sales report`);
   closeModal();
@@ -2996,18 +3069,45 @@ function renderSalesCashDrawer(){
     return `<div class="team-row">
       <p style="font-size:13px;font-weight:600;margin:0;width:64px;">₱${d}</p>
       ${editable
-        ? `<input id="cash-${d}" type="number" min="0" step="1" value="${count}" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setCashDrawerCount(${d}, this)" />`
+        ? `<input id="cash-${d}" type="number" min="0" step="1" value="${count===0?'':count}" placeholder="0" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setCashDrawerCount(${d}, this)" />`
         : `<span style="font-size:13px;">${count} pc${count===1?'':'s'}</span>`}
       <span style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
     </div>`;
   }).join('');
+  const cashSales = cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+  const hasExpected = r.expectedCashSales!=null && r.expectedCashSales!=='';
+  const discrepancy = hasExpected ? cashSales - r.expectedCashSales : null;
+  let discHtml = '';
+  if(hasExpected){
+    const off = Math.abs(discrepancy) < 1;
+    const short = discrepancy < -0.99;
+    const color = off ? 'var(--accent)' : (short ? 'var(--urgent)' : '#B26A00');
+    const label = off ? '✅ Matches expected sales' : (short ? `⚠️ Short by ${peso(Math.abs(discrepancy))}` : `ℹ️ Over by ${peso(Math.abs(discrepancy))}`);
+    discHtml = `<p style="font-size:12px;font-weight:600;color:${color};margin:8px 0 0;text-align:center;">${label}</p>`;
+  }
+  const expectedInput = editable ? `
+    <div class="card" style="margin-top:12px;">
+      <div class="field" style="margin-bottom:0;"><label>Expected cash sales (optional)</label><input id="cash-expected" type="number" step="0.01" value="${r.expectedCashSales!=null?r.expectedCashSales:''}" placeholder="From register/POS tape" oninput="setExpectedCashSales(this)" /></div>
+      <p style="font-size:11px;color:var(--text-muted);margin:8px 0 0;">If your register or POS shows a cash sales total, enter it here to check against the counted drawer.</p>
+      ${discHtml}
+    </div>` : (hasExpected ? `<div class="card" style="margin-top:12px;">${discHtml}</div>` : '');
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Total Cash Drawer</p></div></header>
   <div class="screen" style="padding-top:0;">
     <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL IN DRAWER</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(cashDrawerTotal(r))}</p></div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
     ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Enter how many bills/coins of each denomination are in the drawer.</p>` : ''}
+    ${expectedInput}
   </div>`;
+}
+function setExpectedCashSales(el){
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.expectedCashSales = el.value==='' ? null : (parseFloat(el.value)||0);
+  render();
+  const newEl = document.getElementById('cash-expected');
+  if(newEl) newEl.focus();
+  clearTimeout(salesDrawerSaveTimer);
+  salesDrawerSaveTimer = setTimeout(()=>{ salesDrawerSaveTimer=null; persist(['salesReports']); }, 600);
 }
 let salesDrawerSaveTimer = null;
 function flushSalesDrawerSave(){
@@ -3079,31 +3179,259 @@ function deleteOnlineSale(id){
   render();
 }
 
-function openCashFundsModal(){
-  const r = ensureSalesReport(ui.salesReportDate);
-  ui.modal = {type:'cashfunds-form', value:r.cashFunds||0};
+function openMorningCashCountScreen(fromReport){
+  ui.salesReportDate = dateStr(new Date());
+  ui.morningCashFrom = fromReport ? 'sales-report' : 'main';
+  ui.screen = 'morning-cash-count';
   render();
 }
-function renderCashFundsModal(){
-  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-    <div class="modal-sheet">
-      <p class="modal-title">Cash Funds (morning)</p>
-      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">How much cash was in the drawer at the start of the day?</p>
-      <div class="field"><label>Amount</label><input id="cf-amount" type="number" step="0.01" value="${ui.modal.value}" placeholder="0.00" /></div>
-      <div class="modal-row-actions">
-        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="button" class="btn" onclick="saveCashFunds()">Save</button>
-      </div>
-    </div>
+function backFromMorningCashCount(){
+  flushMorningCashSave();
+  if(ui.morningCashFrom==='sales-report'){ ui.screen='sales-report'; }
+  else { ui.screen='main'; ui.tab='home'; }
+  render();
+}
+function renderMorningCashCount(){
+  const date = ui.salesReportDate || dateStr(new Date());
+  const r = ensureSalesReport(date);
+  const editable = isMorningCashEditable(date);
+  const locked = !!(r.morningCashLocked || r.reportLocked);
+  const rows = CASH_DENOMS.map(d=>{
+    const count = r.cashFundsBreakdown[d]||0;
+    const sub = d*count;
+    return `<div class="team-row">
+      <p style="font-size:13px;font-weight:600;margin:0;width:64px;">₱${d}</p>
+      ${editable
+        ? `<input id="mcash-${d}" type="number" min="0" step="1" value="${count===0?'':count}" placeholder="0" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setMorningCashCount(${d}, this)" />`
+        : `<span style="font-size:13px;">${count} pc${count===1?'':'s'}</span>`}
+      <span style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
+    </div>`;
+  }).join('');
+  const submittedNote = r.cashFundsBy ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Last set by ${r.cashFundsBy} at ${new Date(r.cashFundsAt).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}.</p>` : '';
+  const lockedBanner = locked ? `
+    <div class="card" style="background:var(--accent-light);margin-top:12px;">
+      <p style="margin:0;font-size:12px;font-weight:600;color:var(--accent);">✅ SUBMITTED — LOCKED</p>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">This can no longer be edited.</p>
+    </div>` : '';
+  const submitBtn = editable ? `<button class="btn" style="margin-top:12px;background:#2F8F4E;" onclick="submitMorningCashCount()">✅ Submit Morning Cash Count</button>` : '';
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backFromMorningCashCount()">‹</button><p class="greet" style="font-size:16px;">Cash Funds (morning)</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL MORNING CASH</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(r.cashFunds||0)}</p></div>
+    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Count the bills/coins in the drawer at the start of the day.</p>` : ''}
+    ${submittedNote}
+    ${submitBtn}
+    ${lockedBanner}
   </div>`;
 }
-function saveCashFunds(){
-  const amount = parseFloat(document.getElementById('cf-amount').value)||0;
+let morningCashSaveTimer = null;
+function flushMorningCashSave(){
+  if(morningCashSaveTimer){ clearTimeout(morningCashSaveTimer); morningCashSaveTimer=null; persist(['salesReports']); }
+}
+function setMorningCashCount(denom, el){
   const r = ensureSalesReport(ui.salesReportDate);
-  r.cashFunds = amount;
+  const u = currentUser();
+  r.cashFundsBreakdown[denom] = Math.max(0, parseInt(el.value)||0);
+  r.cashFunds = cashFundsBreakdownTotal(r);
+  r.cashFundsBy = u.name;
+  r.cashFundsAt = Date.now();
+  render();
+  const newEl = document.getElementById('mcash-'+denom);
+  if(newEl) newEl.focus();
+  clearTimeout(morningCashSaveTimer);
+  morningCashSaveTimer = setTimeout(()=>{ morningCashSaveTimer=null; persist(['salesReports']); }, 600);
+}
+window.addEventListener('beforeunload', flushMorningCashSave);
+function submitMorningCashCount(){
+  flushMorningCashSave();
+  const r = ensureSalesReport(ui.salesReportDate);
+  if(!confirm('Are you sure this is correct and true? Once submitted, you won\'t be able to edit this.')) return;
+  r.morningCashLocked = true;
   persist(['salesReports']);
-  logActivity(`set cash funds to ${peso(amount)} in daily sales report`);
-  closeModal();
+  logActivity(`submitted the morning cash count (${peso(r.cashFunds)})`);
+  showToast('Morning cash count submitted');
+  render();
+}
+
+/* ---------- hours & payroll ---------- */
+function openPayrollHoursScreen(){ ui.screen='payroll-hours'; ui.payrollWeekStart = dateStr(mondayOf(new Date())); render(); }
+function shiftPayrollWeek(delta){ ui.payrollWeekStart = addDays(ui.payrollWeekStart, delta*7); render(); }
+function computeHoursForRange(fromDs, toDs){
+  const fromTs = new Date(fromDs+'T00:00:00').getTime();
+  const toTs = new Date(toDs+'T23:59:59').getTime();
+  const recs = DB.attendance.filter(a=>a.ts>=fromTs && a.ts<=toTs).sort((a,b)=>a.ts-b.ts);
+  const byUser = {};
+  recs.forEach(a=>{
+    if(!byUser[a.userId]) byUser[a.userId] = {userName:a.userName, ms:0, pendingIn:null, stillIn:false};
+    const bucket = byUser[a.userId];
+    if(a.type==='in'){ bucket.pendingIn = a.ts; }
+    else if(a.type==='out' && bucket.pendingIn!=null){ bucket.ms += (a.ts - bucket.pendingIn); bucket.pendingIn = null; }
+  });
+  return Object.keys(byUser).map(uid=>({
+    userId: uid,
+    userName: byUser[uid].userName,
+    hours: byUser[uid].ms/3600000,
+    stillClockedIn: byUser[uid].pendingIn!=null
+  })).sort((a,b)=>b.hours-a.hours);
+}
+function renderPayrollHours(){
+  if(!ui.payrollWeekStart) ui.payrollWeekStart = dateStr(mondayOf(new Date()));
+  const weekStart = ui.payrollWeekStart;
+  const weekEnd = addDays(weekStart, 6);
+  const weekLabel = new Date(weekStart+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + new Date(weekEnd+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
+  const results = computeHoursForRange(weekStart, weekEnd);
+  const totalHours = results.reduce((s,r)=>s+r.hours,0);
+  const rows = results.length ? results.map(r=>`
+    <div class="team-row">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">${r.userName}</p>${r.stillClockedIn?'<p style="font-size:11px;color:var(--text-muted);margin:0;">Currently clocked in</p>':''}</div>
+      <span style="font-size:13px;font-weight:600;">${r.hours.toFixed(1)} hrs</span>
+    </div>`).join('') : `<div class="empty-note">No completed time in/out pairs this week.</div>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Hours &amp; Payroll</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftPayrollWeek(-1)">‹ Prev</button>
+      <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftPayrollWeek(1)">Next ›</button>
+    </div>
+    <div class="card" style="background:var(--accent-light);margin-bottom:14px;">
+      <p style="margin:0 0 4px;font-size:12px;color:var(--accent);font-weight:600;">TOTAL HOURS (ALL STAFF)</p>
+      <p style="margin:0;font-size:22px;font-weight:700;color:var(--accent);">${totalHours.toFixed(1)} hrs</p>
+    </div>
+    <div class="card">${rows}</div>
+    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Based on completed time in/out pairs. Hours are computed on the fly — nothing extra is stored.</p>
+  </div>`;
+}
+
+/* ---------- sales trends ---------- */
+function openSalesTrendsScreen(){ ui.screen='sales-trends'; render(); }
+function salesRangeStats(days){
+  const to = dateStr(new Date());
+  const from = addDays(to, -(days-1));
+  const reports = DB.salesReports.filter(r=>r.date>=from && r.date<=to);
+  let cash=0, online=0, expenses=0;
+  reports.forEach(r=>{
+    cash += cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+    online += onlineSalesTotal(r);
+    expenses += expensesTotal(r);
+  });
+  return {days, reportCount:reports.length, cash, online, expenses, total:cash+online};
+}
+function renderSalesTrends(){
+  const s7 = salesRangeStats(7);
+  const s30 = salesRangeStats(30);
+  const to = dateStr(new Date());
+  const from30 = addDays(to, -29);
+  const dayReports = DB.salesReports.filter(r=>r.date>=from30 && r.date<=to).sort((a,b)=>a.date.localeCompare(b.date));
+  const maxTotal = Math.max(1, ...dayReports.map(r=>(cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))+onlineSalesTotal(r)));
+  const bars = dayReports.map(r=>{
+    const total = (cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))+onlineSalesTotal(r);
+    const pct = Math.max(4, Math.round((total/maxTotal)*100));
+    const dLabel = new Date(r.date+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <span style="font-size:10px;color:var(--text-muted);width:44px;flex-shrink:0;">${dLabel}</span>
+      <div style="flex:1;background:var(--border);border-radius:4px;overflow:hidden;height:14px;"><div style="width:${pct}%;background:var(--accent);height:100%;"></div></div>
+      <span style="font-size:10px;font-weight:600;width:64px;text-align:right;flex-shrink:0;">${peso(total)}</span>
+    </div>`;
+  }).join('');
+  const byCat = {};
+  dayReports.forEach(r=>r.expenses.forEach(e=>{
+    const cat = e.cat || 'Other';
+    byCat[cat] = (byCat[cat]||0) + e.amount;
+  }));
+  const catList = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  const catRows = catList.length ? catList.map(([cat,amt])=>`
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>${cat}</span><span style="font-weight:600;">${peso(amt)}</span></div>`).join('')
+    : `<p style="font-size:12px;color:var(--text-muted);margin:0;">No expenses logged in the last 30 days.</p>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Sales Trends</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <div class="card" style="flex:1;background:var(--accent-light);"><p style="margin:0 0 2px;font-size:11px;color:var(--accent);font-weight:600;">LAST 7 DAYS</p><p style="margin:0;font-size:18px;font-weight:700;color:var(--accent);">${peso(s7.total)}</p><p style="margin:4px 0 0;font-size:10px;color:var(--text-muted);">${s7.reportCount} day${s7.reportCount===1?'':'s'} reported</p></div>
+      <div class="card" style="flex:1;background:var(--accent-light);"><p style="margin:0 0 2px;font-size:11px;color:var(--accent);font-weight:600;">LAST 30 DAYS</p><p style="margin:0;font-size:18px;font-weight:700;color:var(--accent);">${peso(s30.total)}</p><p style="margin:4px 0 0;font-size:10px;color:var(--text-muted);">${s30.reportCount} day${s30.reportCount===1?'':'s'} reported</p></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:var(--text-muted);">CASH VS ONLINE (LAST 30 DAYS)</p>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>💵 Cash sales</span><span style="font-weight:600;">${peso(s30.cash)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>📱 Online sales</span><span style="font-weight:600;">${peso(s30.online)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;"><span>💸 Expenses</span><span style="font-weight:600;">${peso(s30.expenses)}</span></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:var(--text-muted);">EXPENSES BY CATEGORY (LAST 30 DAYS)</p>
+      ${catRows}
+    </div>
+    <div class="card">
+      <p style="margin:0 0 10px;font-size:12px;font-weight:600;color:var(--text-muted);">DAILY TOTAL SALES</p>
+      ${bars || '<div class="empty-note">No sales reports in the last 30 days.</div>'}
+    </div>
+    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Only covers days with a submitted report still on file (reports auto-delete after 30 days).</p>
+  </div>`;
+}
+
+/* ---------- wastage trends ---------- */
+function openWastageTrendsScreen(){ ui.screen='wastage-trends'; render(); }
+function renderWastageTrends(){
+  const cutoff = Date.now() - 30*24*60*60*1000;
+  const recent = DB.wastage.filter(w=>w.ts>=cutoff);
+  const byItem = {};
+  recent.forEach(w=>{
+    const key = w.itemName+'|'+w.unit;
+    if(!byItem[key]) byItem[key] = {itemName:w.itemName, unit:w.unit, qty:0, count:0};
+    byItem[key].qty += w.qty;
+    byItem[key].count += 1;
+  });
+  const list = Object.values(byItem).sort((a,b)=>b.qty-a.qty).slice(0,15);
+  const rows = list.length ? list.map(it=>`
+    <div class="team-row">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">${it.itemName}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Logged ${it.count} time${it.count===1?'':'s'}</p></div>
+      <span style="font-size:13px;font-weight:600;">${it.qty} ${it.unit}</span>
+    </div>`).join('') : `<div class="empty-note">No wastage logged in the last 30 days.</div>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Wastage Trends</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">Most wasted items, last 30 days</p>
+    <div class="card">${rows}</div>
+  </div>`;
+}
+
+/* ---------- backup / export ---------- */
+function downloadJSON(filename, obj){
+  try{
+    const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    showToast('Downloading ' + filename);
+  }catch(e){
+    showToast('Download not supported here — try opening this app in your browser.');
+  }
+}
+function backupAllData(){
+  const safeUsers = DB.users.map(u=>({id:u.id, name:u.name, email:u.email, role:u.role, phone:u.phone}));
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    users: safeUsers,
+    locations: DB.locations,
+    items: DB.items,
+    recipes: DB.recipes,
+    attendance: DB.attendance.map(a=>({id:a.id, userId:a.userId, userName:a.userName, type:a.type, ts:a.ts})),
+    wastage: DB.wastage,
+    oilLog: DB.oilLog,
+    shifts: DB.shifts,
+    schedule: DB.schedule,
+    events: DB.events,
+    checklists: DB.checklists,
+    checklistRuns: DB.checklistRuns,
+    notes: DB.notes,
+    salesReports: DB.salesReports,
+    settings: DB.settings
+  };
+  downloadJSON(`backup-${dateStr(new Date())}.json`, payload);
 }
 
 init();

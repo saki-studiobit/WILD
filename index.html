@@ -1871,9 +1871,10 @@ function renderTeam(){
         <option value="owner">Owner</option>
       </select>`;
     }
+    const resetPwBtn = isOwner(u) ? `<button class="link-btn" style="margin-left:8px;" onclick="openResetPasswordModal('${m.id}')">Reset password</button>` : '';
     const removeBtn = (isOwner(u) && m.id!==u.id && m.role!=='owner') ? `<button class="link-btn" style="margin-left:8px;color:var(--urgent);" onclick="removeUser('${m.id}')">Remove</button>` : '';
     const phoneLine = m.phone ? `<p style="font-size:11px;color:var(--accent);margin:0;"><a href="tel:${m.phone}" style="color:inherit;text-decoration:none;">📞 ${m.phone}</a></p>` : '';
-    return `<div class="team-row"><div class="team-left"><div class="avatar">${initials(m.name)}</div><div><p style="font-size:13px;font-weight:600;margin:0;">${m.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${m.email}</p>${phoneLine}</div></div><div style="display:flex;align-items:center;">${control}${removeBtn}</div></div>`;
+    return `<div class="team-row"><div class="team-left"><div class="avatar">${initials(m.name)}</div><div><p style="font-size:13px;font-weight:600;margin:0;">${m.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${m.email}</p>${phoneLine}</div></div><div style="display:flex;align-items:center;">${control}${resetPwBtn}${removeBtn}</div></div>`;
   }).join('');
   const pendingInvites = DB.invites.filter(i=>!i.used);
   const inviteHtml = isOwner(u) ? `
@@ -1899,6 +1900,46 @@ function renderTeam(){
   </div>`;
 }
 
+function openResetPasswordModal(userId){
+  const m = DB.users.find(u=>u.id===userId);
+  if(!m) return;
+  ui.modal = {type:'reset-password-form', userId, userName:m.name};
+  render();
+}
+function renderResetPasswordModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Reset password for ${ui.modal.userName}</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">Choose a new password, then share it with them directly.</p>
+      <div class="field"><label>New password</label>
+        <div style="position:relative;">
+          <input id="reset-pw-input" type="password" placeholder="New password" style="padding-right:56px;" />
+          <button type="button" onclick="togglePasswordVisibility('reset-pw-input', this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;padding:6px;">Show</button>
+        </div>
+      </div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveResetPassword()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveResetPassword(){
+  const input = document.getElementById('reset-pw-input');
+  const newPassword = input.value;
+  if(!newPassword || newPassword.length<4){ showToast('Password must be at least 4 characters'); return; }
+  const userId = ui.modal.userId;
+  const m = DB.users.find(u=>u.id===userId);
+  if(!m) return;
+  const salt = generateSalt();
+  m.salt = salt;
+  m.passwordHash = await hashPassword(newPassword, salt);
+  delete m.password;
+  persist(['users']);
+  logActivity(`reset ${m.name}'s password`);
+  showToast(`Password reset for ${m.name}`);
+  closeModal();
+}
 function renderActivityLog(){
   const rows = DB.activity.length ? DB.activity.map(a=>`
     <div class="activity-row"><p class="activity-text"><strong>${a.user}</strong> ${a.text}</p><p class="activity-time">${new Date(a.ts).toLocaleString()}</p></div>
@@ -2115,7 +2156,10 @@ function renderProfile(){
     <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="backupAllData()">⬇ Backup all data</button>` : '';
 
   return `
-  <header class="topbar"><p class="greet">Profile</p></header>
+  <header class="topbar" style="display:flex;align-items:center;justify-content:space-between;">
+    <p class="greet">Profile</p>
+    ${isOwner(u) ? `<button class="link-btn" style="font-size:11px;color:var(--urgent);" onclick="openResetAllDataModal()">Reset data</button>` : ''}
+  </header>
   <div class="screen" style="padding-top:0;">
     <div class="card" style="text-align:center;padding:26px 16px;">
       <div class="avatar" style="width:56px;height:56px;font-size:18px;margin:0 auto 10px;">${initials(u.name)}</div>
@@ -2169,6 +2213,8 @@ function renderModal(){
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
   if(ui.modal.type==='confirm-dialog') return renderConfirmModal();
+  if(ui.modal.type==='reset-password-form') return renderResetPasswordModal();
+  if(ui.modal.type==='reset-all-data-confirm') return renderResetAllDataModal();
   return '';
 }
 
@@ -3478,6 +3524,39 @@ function backupAllData(){
     settings: DB.settings
   };
   downloadJSON(`backup-${dateStr(new Date())}.json`, payload);
+}
+
+function openResetAllDataModal(){
+  ui.modal = {type:'reset-all-data-confirm'};
+  render();
+}
+function renderResetAllDataModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title" style="color:var(--urgent);">⚠️ Reset All Data</p>
+      <p style="font-size:13px;color:var(--text-muted);margin:-8px 0 12px;">This permanently deletes everything in the app — inventory, recipes, attendance, sales reports, wastage, schedules, checklists, and all other team members. Owner accounts are kept, so you won't be signed out. This cannot be undone. Consider downloading a backup first.</p>
+      <p style="font-size:13px;font-weight:600;margin:0 0 8px;">Type DELETE below to confirm.</p>
+      <div class="field"><input id="reset-confirm-input" placeholder="Type DELETE" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" style="background:var(--urgent);" onclick="confirmResetAllData()">Reset Everything</button>
+      </div>
+    </div>
+  </div>`;
+}
+function confirmResetAllData(){
+  const val = document.getElementById('reset-confirm-input').value.trim().toUpperCase();
+  if(val !== 'DELETE'){ showToast('Type DELETE exactly to confirm'); return; }
+  resetAllData();
+}
+function resetAllData(){
+  const owners = DB.users.filter(u=>u.role==='owner');
+  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[] };
+  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports']);
+  ui.modal = null;
+  ui.screen = 'main'; ui.tab = 'home';
+  showToast('All data has been reset');
+  render();
 }
 
 init();

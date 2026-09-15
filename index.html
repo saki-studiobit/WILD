@@ -1713,7 +1713,7 @@ function renderShoppingList(){
     return `<div class="section-title">${name}${orderedCount?` · ${orderedCount}/${items.length} ordered`:''}</div>${contactLine}<div class="card" style="padding:6px 16px;">${rows}</div>`;
   }).join('');
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Shopping List</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Order List</p></div></header>
   <div class="screen" style="padding-top:0;">
     ${needed.length ? `<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Tap "Mark ordered" once you've placed an order, so the team knows it's handled.</p>` : ''}    ${needed.length ? sections : `<div class="empty-note">Nothing needs restocking right now.</div>`}
     ${needed.length ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">Grouped by supplier — add a supplier to an item to organize it here.</p>` : ''}

@@ -1591,7 +1591,7 @@ function renderAuth(){
         <div class="role-opt ${ui.authRole==='manager'?'active':''}" onclick="ui.authRole='manager';render();">Manager</div>
       </div>
     </div>
-    ${ui.authRole==='manager' ? `<div class="field"><label>Manager invite code</label><input id="reg-invite" placeholder="6-digit code from the management" /></div>` : `<div class="field"><label>Staff invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>`}
+    ${ui.authRole==='manager' ? `<div class="field"><label>Manager invite code</label><input id="reg-invite" placeholder="6-digit code from the management" /></div>` : `<div class="field"><label>Staff invite code</label><input id="reg-invite" placeholder="6-digit code from the management" /></div>`}
     ` : ''}
     <p class="error-text" id="auth-error"></p>
     <button class="btn" type="button" onclick="handleRegister()">${hasUsers?'Create account':'Set up workspace'}</button>

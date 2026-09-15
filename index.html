@@ -370,12 +370,12 @@ async function handleRegister(){
   if(DB.users.some(u=>u.email===email)){ errEl.textContent='That email is already registered.'; return; }
   let role = 'staff';
   if(DB.users.length===0){ role='owner'; }
-  else if(ui.authRole==='manager'){
+  else {
+    role = ui.authRole==='manager' ? 'manager' : 'staff';
     const code = document.getElementById('reg-invite').value.trim();
-    const inv = DB.invites.find(i=>i.code===code && !i.used && i.role==='manager');
-    if(!inv){ errEl.textContent='Invalid or already-used invite code.'; return; }
+    const inv = DB.invites.find(i=>i.code===code && !i.used && i.role===role);
+    if(!inv){ errEl.textContent='Invalid or already-used invite code. Ask the owner for one.'; return; }
     inv.used = true; inv.usedBy = email;
-    role='manager';
   }
   const salt = generateSalt();
   const passwordHash = await hashPassword(password, salt);
@@ -1263,6 +1263,14 @@ function openRecipeModal(recipeId){
 }
 function setRecipeModalCategory(cat){ ui.modal.category = cat; render(); }
 function setRecipeFilterCat(cat){ ui.recipeCat = cat; render(); }
+function toggle86(recipeId){
+  const r = DB.recipes.find(r=>r.id===recipeId);
+  if(!r) return;
+  r.eightySixed = !r.eightySixed;
+  persist(['recipes']);
+  logActivity(`${r.eightySixed ? 'marked' : 'un-marked'} "${r.name}" as ${r.eightySixed ? 'sold out (86\'d)' : 'available again'}`);
+  render();
+}
 function openRecipeViewModal(recipeId){
   ui.modal = {type:'recipe-view', recipeId};
   render();
@@ -1411,9 +1419,9 @@ function importInventoryCSV(e){
 }
 
 /* ---------- team actions ---------- */
-function generateInvite(){
+function generateInvite(role){
   const code = Math.floor(100000+Math.random()*900000).toString();
-  DB.invites.push({code, role:'manager', used:false});
+  DB.invites.push({code, role, used:false});
   persist(['invites']);
   render();
 }
@@ -1566,7 +1574,7 @@ function renderAuth(){
         <div class="role-opt ${ui.authRole==='manager'?'active':''}" onclick="ui.authRole='manager';render();">Manager</div>
       </div>
     </div>
-    ${ui.authRole==='manager' ? `<div class="field"><label>Manager invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>` : ''}
+    ${ui.authRole==='manager' ? `<div class="field"><label>Manager invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>` : `<div class="field"><label>Staff invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>`}
     ` : ''}
     <p class="error-text" id="auth-error"></p>
     <button class="btn" type="button" onclick="handleRegister()">${hasUsers?'Create account':'Set up workspace'}</button>
@@ -1662,10 +1670,21 @@ function renderHome(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
+  const eightySixed = DB.recipes.filter(r=>r.eightySixed);
+  const eightySixCard = eightySixed.length ? `
+    <div class="card" style="background:var(--urgent-bg);border-color:var(--urgent);margin-bottom:14px;">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:var(--urgent);">🚫 86 LIST — SOLD OUT TODAY</p>
+      ${eightySixed.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,0,0,0.06);">
+        <span style="font-size:13px;font-weight:600;">${r.name}</span>
+        <button class="link-btn" style="font-size:12px;" onclick="toggle86('${r.id}')">Mark available</button>
+      </div>`).join('')}
+    </div>` : '';
+
   if(isOwner(u)){
     return `
     <header class="topbar"><div><p class="greet">Hi, ${u.name.split(' ')[0]}</p><p class="greet-sub">Inventory at a glance</p></div></header>
     <div class="screen" style="padding-top:0;">
+      ${eightySixCard}
       <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openTeamScheduleScreen()">📅 View Team Schedule</button>
       ${eventsCard}
@@ -1684,6 +1703,7 @@ function renderHome(){
   return `
   <header class="topbar"><div><p class="greet">Hi, ${u.name.split(' ')[0]}</p><p class="greet-sub">Inventory at a glance</p></div></header>
   <div class="screen" style="padding-top:0;">
+    ${eightySixCard}
     ${attendCard}
     ${myScheduleBtn}
     ${boostCard}
@@ -1839,11 +1859,15 @@ function renderRecipes(){
   if(search) filtered = filtered.filter(r=>r.name.toLowerCase().includes(search));
   const rows = filtered.length ? filtered.map(r=>{
     const preview = (r.ingredients||[]).slice(0,3).join(', ') + ((r.ingredients||[]).length>3 ? ', …' : '');
-    return `<div class="card recipe-card" onclick="${isMgr(u)?`openRecipeModal('${r.id}')`:`openRecipeViewModal('${r.id}')`}">
+    const eightySixBtn = r.eightySixed
+      ? `<button class="link-btn" style="color:var(--urgent);font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">🚫 86'd — tap to restore</button>`
+      : `<button class="link-btn" style="font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">Mark 86'd</button>`;
+    return `<div class="card recipe-card" style="${r.eightySixed?'opacity:0.7;':''}" onclick="${isMgr(u)?`openRecipeModal('${r.id}')`:`openRecipeViewModal('${r.id}')`}">
       <div style="display:flex;align-items:flex-start;">
         <div style="flex:1;min-width:0;">
           <div class="recipe-top"><p class="recipe-name">${r.name}</p><span class="badge badge-neutral">${r.category||'Food'}</span></div>
           <p class="ing-list">${preview}</p>
+          ${eightySixBtn}
         </div>
       </div>
     </div>`;
@@ -1876,12 +1900,17 @@ function renderTeam(){
     const phoneLine = m.phone ? `<p style="font-size:11px;color:var(--accent);margin:0;"><a href="tel:${m.phone}" style="color:inherit;text-decoration:none;">📞 ${m.phone}</a></p>` : '';
     return `<div class="team-row"><div class="team-left"><div class="avatar">${initials(m.name)}</div><div><p style="font-size:13px;font-weight:600;margin:0;">${m.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${m.email}</p>${phoneLine}</div></div><div style="display:flex;align-items:center;">${control}${resetPwBtn}${removeBtn}</div></div>`;
   }).join('');
-  const pendingInvites = DB.invites.filter(i=>!i.used);
+  const pendingStaffInvites = DB.invites.filter(i=>!i.used && i.role==='staff');
+  const pendingManagerInvites = DB.invites.filter(i=>!i.used && i.role==='manager');
   const inviteHtml = isOwner(u) ? `
-    <div class="section-title">Manager invites</div>
+    <div class="section-title">Invite codes</div>
     <div class="card">
-      ${pendingInvites.length ? pendingInvites.map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:16px;letter-spacing:2px;font-weight:600;">${i.code}</span><span class="badge badge-neutral">unused</span></div>`).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">No pending invite codes.</p>`}
-      <button class="btn btn-secondary" style="margin-top:10px;" onclick="generateInvite()">Generate invite code</button>
+      ${pendingStaffInvites.length ? pendingStaffInvites.map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:16px;letter-spacing:2px;font-weight:600;">${i.code}</span><span class="badge badge-neutral">unused</span></div>`).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">No pending invite codes.</p>`}
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="generateInvite('staff')">Generate staff invite code</button>
+    </div>
+    <div class="card">
+      ${pendingManagerInvites.length ? pendingManagerInvites.map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:16px;letter-spacing:2px;font-weight:600;">${i.code}</span><span class="badge badge-neutral">unused</span></div>`).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">No pending invite codes.</p>`}
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="generateInvite('manager')">Generate manager invite code</button>
     </div>` : '';
   const shiftHtml = canManageSchedule(u) ? `
     <div class="section-title">Schedule</div>
@@ -3018,6 +3047,7 @@ function renderSalesReport(){
     <div class="card" style="background:var(--accent-light);margin-top:14px;">
       <p style="margin:0;font-size:12px;font-weight:600;color:var(--accent);">✅ SUBMITTED — LOCKED</p>
       <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">${r.reportLockedBy?`Submitted by ${r.reportLockedBy} at ${new Date(r.reportLockedAt).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}. `:''}This report can no longer be edited.</p>
+      ${isOwner(u) ? `<button class="link-btn" style="margin-top:8px;font-size:12px;" onclick="openUnlockReportModal()">Unlock for correction</button>` : ''}
     </div>` : '';
 
   return `
@@ -3100,6 +3130,18 @@ function submitSalesReport(){
     persist(['salesReports']);
     logActivity(`submitted the final daily sales report for ${date} (${peso((cashDrawerTotal(r)-(r.cashFunds||0)+expensesTotal(r))+onlineSalesTotal(r))})`);
     showToast('Daily sales report submitted');
+  });
+}
+function openUnlockReportModal(){
+  const date = ui.salesReportDate;
+  openConfirmModal(`Unlock the sales report for ${date} so it can be edited again? This will be logged.`, ()=>{
+    const r = ensureSalesReport(date);
+    const u = currentUser();
+    r.reportLocked = false;
+    r.morningCashLocked = false;
+    persist(['salesReports']);
+    logActivity(`unlocked the sales report for ${date} for corrections`);
+    showToast('Report unlocked for editing');
   });
 }
 

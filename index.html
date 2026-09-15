@@ -490,6 +490,23 @@ function isRecordLate(record){
   const d = new Date(record.ts);
   return (d.getHours()*60+d.getMinutes()) > (h*60+m);
 }
+const NO_SHOW_GRACE_MINUTES = 15;
+function getNoShowAlerts(){
+  const today = dateStr(new Date());
+  const now = new Date();
+  const nowMinutes = now.getHours()*60 + now.getMinutes();
+  const alerts = [];
+  DB.users.filter(u=>u.role!=='owner').forEach(u=>{
+    const shift = shiftForUserOnDate(u.id, today);
+    if(!shift) return;
+    const [h,m] = shift.timeIn.split(':').map(Number);
+    const shiftStartMinutes = h*60+m;
+    if(nowMinutes < shiftStartMinutes + NO_SHOW_GRACE_MINUTES) return;
+    if(todaysSignIn(u.id)) return;
+    alerts.push({userId:u.id, name:u.name, shiftTime:shift.timeIn, minutesLate: nowMinutes-shiftStartMinutes});
+  });
+  return alerts.sort((a,b)=>b.minutesLate-a.minutesLate);
+}
 function isTimeFormat(v){ return /^([01]?\d|2[0-3]):([0-5]\d)$/.test(v.trim()); }
 function normTime(v){ const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(v.trim()); return m[1].padStart(2,'0')+':'+m[2]; }
 const ENCOURAGING_MESSAGES = [
@@ -1680,11 +1697,22 @@ function renderHome(){
       </div>`).join('')}
     </div>` : '';
 
+  const noShowAlerts = isOwner(u) ? getNoShowAlerts() : [];
+  const noShowCard = noShowAlerts.length ? `
+    <div class="card" style="background:var(--urgent-bg);border-color:var(--urgent);margin-bottom:14px;">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:var(--urgent);">⚠️ NOT YET CLOCKED IN</p>
+      ${noShowAlerts.map(a=>{
+        const lateLabel = a.minutesLate>=60 ? `${Math.floor(a.minutesLate/60)}h ${a.minutesLate%60}m` : `${a.minutesLate}m`;
+        return `<div style="padding:5px 0;border-bottom:1px solid rgba(0,0,0,0.06);font-size:13px;"><strong>${a.name}</strong> — scheduled ${a.shiftTime}, ${lateLabel} late</div>`;
+      }).join('')}
+    </div>` : '';
+
   if(isOwner(u)){
     return `
     <header class="topbar"><div><p class="greet">Hi, ${u.name.split(' ')[0]}</p><p class="greet-sub">Inventory at a glance</p></div></header>
     <div class="screen" style="padding-top:0;">
       ${eightySixCard}
+      ${noShowCard}
       <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openTeamScheduleScreen()">📅 View Team Schedule</button>
       ${eventsCard}

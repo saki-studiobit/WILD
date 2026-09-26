@@ -610,6 +610,7 @@ function openChecklistManageScreen(){ ui.screen='checklist-manage'; render(); }
 
 /* ---------- morning priority inventory ---------- */
 function openMorningPriorityScreen(){ ui.screen='morning-priority'; ui.priorityCat='all'; render(); }
+function openFreshProduceScreen(){ ui.screen='fresh-produce'; render(); }
 function setPriorityCat(cat){ ui.priorityCat = cat; render(); }
 
 function openChecklistEditScreen(checklistId){ ui.screen='checklist-edit'; ui.activeChecklistId=checklistId; render(); }
@@ -745,8 +746,8 @@ function openItemEditModal(itemId){
   const subId = item ? item.subId : (loc && loc.subs[0] ? loc.subs[0].id : null);
   ui.modal = {
     type:'item-form', itemId,
-    draft: item ? {name:item.name, brand:item.brand||'', supplier:item.supplier||'', supplierPhone:item.supplierPhone||'', supplierNote:item.supplierNote||'', unit:item.unit, qty:item.qty, low:item.low||0, urgent:item.urgent||0, photo:item.photo||null, usage:item.usage||'', pinned:item.pinned||false}
-                : {name:'', brand:'', supplier:'', supplierPhone:'', supplierNote:'', unit:'pcs', qty:0, low:0, urgent:0, photo:null, usage:'', pinned:false},
+    draft: item ? {name:item.name, brand:item.brand||'', supplier:item.supplier||'', supplierPhone:item.supplierPhone||'', supplierNote:item.supplierNote||'', unit:item.unit, qty:item.qty, low:item.low||0, urgent:item.urgent||0, photo:item.photo||null, usage:item.usage||'', pinned:item.pinned||false, freshProduce:item.freshProduce||false}
+                : {name:'', brand:'', supplier:'', supplierPhone:'', supplierNote:'', unit:'pcs', qty:0, low:0, urgent:0, photo:null, usage:'', pinned:false, freshProduce:false},
     selectedCat: catId, selectedSub: subId
   };
   render();
@@ -880,6 +881,7 @@ function syncItemDraftFromDOM(){
   if(g('it-urgent')) d.urgent = parseFloat(g('it-urgent').value)||0;
   if(g('it-usage')) d.usage = g('it-usage').value;
   if(g('it-pinned')) d.pinned = g('it-pinned').checked;
+  if(g('it-fresh')) d.freshProduce = g('it-fresh').checked;
 }
 function onCategorySelectChange(value){
   syncItemDraftFromDOM();
@@ -941,10 +943,10 @@ function saveNewOrEditedItem(){
   if(ui.modal.itemId){
     const item = DB.items.find(i=>i.id===ui.modal.itemId);
     Object.assign(item, {name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, photo:d.photo, usage:d.usage.trim(), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub});
-    if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; }
+    if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; item.freshProduce = d.freshProduce; }
     logActivity(`edited item ${name}`);
   } else {
-    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false});
+    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false});
     logActivity(`added new item ${name}`);
   }
   persist(['items']);
@@ -1326,7 +1328,7 @@ function toggle86(recipeId){
   if(!r) return;
   r.eightySixed = !r.eightySixed;
   persist(['recipes']);
-  logActivity(`${r.eightySixed ? 'marked' : 'un-marked'} "${r.name}" as ${r.eightySixed ? 'sold out (86\'d)' : 'available again'}`);
+  logActivity(`${r.eightySixed ? 'marked' : 'un-marked'} "${r.name}" as ${r.eightySixed ? 'out of stock' : 'available again'}`);
   render();
 }
 function openRecipeViewModal(recipeId){
@@ -1568,6 +1570,7 @@ function render(){
   if(ui.screen==='security-log'){ body = renderSecurityLog(); app.innerHTML = body; return; }
   if(ui.screen==='checklist-hub'){ body = renderChecklistHub(); app.innerHTML = body; return; }
   if(ui.screen==='morning-priority'){ body = renderMorningPriority(); app.innerHTML = body + renderModal(); return; }
+  if(ui.screen==='fresh-produce'){ body = renderFreshProduce(); app.innerHTML = body; return; }
   if(ui.screen==='checklist-run'){ body = renderChecklistRun(); app.innerHTML = body; return; }
   if(ui.screen==='checklist-manage'){ body = renderChecklistManage(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='checklist-edit'){ body = renderChecklistEdit(); app.innerHTML = body + renderModal(); return; }
@@ -1713,7 +1716,7 @@ function renderShoppingList(){
     return `<div class="section-title">${name}${orderedCount?` · ${orderedCount}/${items.length} ordered`:''}</div>${contactLine}<div class="card" style="padding:6px 16px;">${rows}</div>`;
   }).join('');
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Order List</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Shopping List</p></div></header>
   <div class="screen" style="padding-top:0;">
     ${needed.length ? `<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Tap "Mark ordered" once you've placed an order, so the team knows it's handled.</p>` : ''}    ${needed.length ? sections : `<div class="empty-note">Nothing needs restocking right now.</div>`}
     ${needed.length ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">Grouped by supplier — add a supplier to an item to organize it here.</p>` : ''}
@@ -1788,14 +1791,15 @@ function renderHome(){
     <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Morning Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Order List</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
   const eightySixed = DB.recipes.filter(r=>r.eightySixed);
   const eightySixCard = eightySixed.length ? `
     <div class="card" style="background:var(--urgent-bg);border-color:var(--urgent);margin-bottom:14px;">
-      <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:var(--urgent);">🚫 86 LIST — SOLD OUT TODAY</p>
+      <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:var(--urgent);">🚫 OUT OF STOCK — SOLD OUT TODAY</p>
       ${eightySixed.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,0,0,0.06);">
         <span style="font-size:13px;font-weight:600;">${r.name}</span>
         <button class="link-btn" style="font-size:12px;" onclick="toggle86('${r.id}')">Mark available</button>
@@ -1820,7 +1824,8 @@ function renderHome(){
       ${noShowCard}
       <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Order List</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Staff Daily Tasks</button>
       <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openWastageLogScreen()">🗑 Wastage Report</button>
       <div class="section-title">Team</div>
@@ -1995,8 +2000,8 @@ function renderRecipes(){
   const rows = filtered.length ? filtered.map(r=>{
     const preview = (r.ingredients||[]).slice(0,3).join(', ') + ((r.ingredients||[]).length>3 ? ', …' : '');
     const eightySixBtn = r.eightySixed
-      ? `<button class="link-btn" style="color:var(--urgent);font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">🚫 86'd — tap to restore</button>`
-      : `<button class="link-btn" style="font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">Mark 86'd</button>`;
+      ? `<button class="link-btn" style="color:var(--urgent);font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">🚫 Out of Stock — tap to restore</button>`
+      : `<button class="link-btn" style="font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">Mark Out of Stock</button>`;
     return `<div class="card recipe-card" style="${r.eightySixed?'opacity:0.7;':''}" onclick="${isMgr(u)?`openRecipeModal('${r.id}')`:`openRecipeViewModal('${r.id}')`}">
       <div style="display:flex;align-items:flex-start;">
         <div style="flex:1;min-width:0;">
@@ -2684,6 +2689,10 @@ function renderItemFormModal(){
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;cursor:pointer;">
         <input id="it-pinned" type="checkbox" ${d.pinned?'checked':''} style="width:18px;height:18px;" />
         📌 Include in Morning Priority Inventory
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;cursor:pointer;">
+        <input id="it-fresh" type="checkbox" ${d.freshProduce?'checked':''} style="width:18px;height:18px;" />
+        🥬 Include in Fresh Produce
       </label>` : `<p class="mgr-note">Low-stock reminders are set by a manager or owner.</p>`}
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -2992,6 +3001,25 @@ function renderMorningPriority(){
   <div class="screen" style="padding-top:0;">
     ${total ? `<div class="chip-row">${catChips}</div>` : ''}
     ${sections || '<div class="empty-note">No items pinned yet. Owners and managers can pin items from the item edit screen in Inventory.</div>'}
+  </div>`;
+}
+function renderFreshProduce(){
+  const all = DB.items.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const tagged = all.filter(i=>i.freshProduce);
+
+  const taggedRows = tagged.length ? tagged.map(i=>{
+    const st = itemStatus(i);
+    return `<div class="team-row">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">${i.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${i.qty} ${i.unit}</p></div>
+      <span class="badge ${statusBadgeClass(st)}">${statusLabel(st)}</span>
+    </div>`;
+  }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and managers can include an item from the item edit screen in Inventory.</div>`;
+
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">The team uses this list every morning to check what needs buying.</p>
+    <div class="card" style="padding:6px 16px;">${taggedRows}</div>
   </div>`;
 }
 function renderChecklistManage(){

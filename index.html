@@ -1791,7 +1791,7 @@ function renderHome(){
     <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Morning Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce To Buy</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
@@ -1824,7 +1824,7 @@ function renderHome(){
       ${noShowCard}
       <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce To Buy</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Staff Daily Tasks</button>
       <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openWastageLogScreen()">🗑 Wastage Report</button>
@@ -3005,20 +3005,19 @@ function renderMorningPriority(){
 }
 function renderFreshProduce(){
   const all = DB.items.slice().sort((a,b)=>a.name.localeCompare(b.name));
-  const tagged = all.filter(i=>i.freshProduce);
+  const tagged = all.filter(i=>i.freshProduce && itemStatus(i)==='urgent');
 
   const taggedRows = tagged.length ? tagged.map(i=>{
-    const st = itemStatus(i);
     return `<div class="team-row">
       <div><p style="font-size:13px;font-weight:600;margin:0;">${i.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${i.qty} ${i.unit}</p></div>
-      <span class="badge ${statusBadgeClass(st)}">${statusLabel(st)}</span>
+      <span class="badge badge-urgent">Urgent</span>
     </div>`;
-  }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and managers can include an item from the item edit screen in Inventory.</div>`;
+  }).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
 
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce To Buy</p></div></header>
   <div class="screen" style="padding-top:0;">
-    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">The team uses this list every morning to check what needs buying.</p>
+    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Only fresh produce items that are urgently low show up here.</p>
     <div class="card" style="padding:6px 16px;">${taggedRows}</div>
   </div>`;
 }

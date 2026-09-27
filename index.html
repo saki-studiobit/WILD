@@ -213,7 +213,7 @@ function saveLocal(key, val){
 }
 
 /* ---------- app state ---------- */
-let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[] };
+let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[] };
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
@@ -257,6 +257,7 @@ async function init(){
   DB.priorityChecks = await loadShared('inv_prioritychecks', []);
   DB.salesReports = await loadShared('inv_salesreports', []);
   DB.shoppingMarks = await loadShared('inv_shoppingmarks', []);
+  DB.freshProduceChecks = await loadShared('inv_freshproducechecks', []);
   trimOldAttendance();
   trimOldAttendancePhotos();
   trimOldNotes();
@@ -288,6 +289,7 @@ function persist(keys){
   if(keys.includes('priorityChecks')) saveShared('inv_prioritychecks', DB.priorityChecks);
   if(keys.includes('salesReports')) saveShared('inv_salesreports', DB.salesReports);
   if(keys.includes('shoppingMarks')) saveShared('inv_shoppingmarks', DB.shoppingMarks);
+  if(keys.includes('freshProduceChecks')) saveShared('inv_freshproducechecks', DB.freshProduceChecks);
 }
 
 function logActivity(text){
@@ -611,6 +613,18 @@ function openChecklistManageScreen(){ ui.screen='checklist-manage'; render(); }
 /* ---------- morning priority inventory ---------- */
 function openMorningPriorityScreen(){ ui.screen='morning-priority'; ui.priorityCat='all'; render(); }
 function openFreshProduceScreen(){ ui.screen='fresh-produce'; render(); }
+function toggleFreshProduceCheck(itemId){
+  const today = dateStr(new Date());
+  const existing = DB.freshProduceChecks.find(c=>c.itemId===itemId && c.date===today);
+  if(existing){
+    DB.freshProduceChecks = DB.freshProduceChecks.filter(c=>c!==existing);
+  } else {
+    const u = currentUser();
+    DB.freshProduceChecks.push({itemId, date:today, checkedBy:u.name, checkedAt:Date.now()});
+  }
+  persist(['freshProduceChecks']);
+  render();
+}
 function setPriorityCat(cat){ ui.priorityCat = cat; render(); }
 
 function openChecklistEditScreen(checklistId){ ui.screen='checklist-edit'; ui.activeChecklistId=checklistId; render(); }
@@ -1791,7 +1805,7 @@ function renderHome(){
     <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Morning Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce To Buy</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
@@ -1824,7 +1838,7 @@ function renderHome(){
       ${noShowCard}
       <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 View Daily Sales Report</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce To Buy</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Staff Daily Tasks</button>
       <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openWastageLogScreen()">🗑 Wastage Report</button>
@@ -2600,6 +2614,14 @@ function renderItemQtyModal(){
     ? `<img src="${item.photo}" style="width:88px;height:88px;border-radius:14px;object-fit:cover;margin:0 auto 12px;display:block;" />`
     : `<div style="width:88px;height:88px;border-radius:14px;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;margin:0 auto 12px;">${initials(item.name)}</div>`;
   const usageBlock = item.usage ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin:10px 0 0;">Used for: ${item.usage}</p>` : '';
+  const todayCheck = item.freshProduce ? DB.freshProduceChecks.find(c=>c.itemId===item.id && c.date===dateStr(new Date())) : null;
+  const freshCheckBlock = item.freshProduce ? `
+    <div class="card" style="margin:14px 0 0;padding:10px 14px;cursor:pointer;" onclick="toggleFreshProduceCheck('${item.id}')">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">${todayCheck?'✅':'⬜'}</span>
+        <div><p style="font-size:13px;font-weight:600;margin:0;">🥬 Checked condition/freshness today</p>${todayCheck?`<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Checked by ${todayCheck.checkedBy}</p>`:''}</div>
+      </div>
+    </div>` : '';
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
     <div class="modal-sheet">
       ${photoBlock}
@@ -2612,6 +2634,7 @@ function renderItemQtyModal(){
         <button class="qty-btn" onclick="saveItemQty('${item.id}', 1)">+</button>
       </div>
       <p style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:-8px;">${item.unit}</p>
+      ${freshCheckBlock}
       <div class="modal-row-actions">
         <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn" onclick="commitItemQty('${item.id}')">Save count</button>
@@ -3005,7 +3028,12 @@ function renderMorningPriority(){
 }
 function renderFreshProduce(){
   const all = DB.items.slice().sort((a,b)=>a.name.localeCompare(b.name));
-  const tagged = all.filter(i=>i.freshProduce && itemStatus(i)==='urgent');
+  const allFresh = all.filter(i=>i.freshProduce);
+  const tagged = allFresh.filter(i=>itemStatus(i)==='urgent');
+  const today = dateStr(new Date());
+  const beforeChecks = DB.freshProduceChecks.length;
+  DB.freshProduceChecks = DB.freshProduceChecks.filter(c=>c.date===today);
+  if(DB.freshProduceChecks.length !== beforeChecks) persist(['freshProduceChecks']);
 
   const taggedRows = tagged.length ? tagged.map(i=>{
     return `<div class="team-row">
@@ -3014,11 +3042,25 @@ function renderFreshProduce(){
     </div>`;
   }).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
 
+  const qualityRows = allFresh.length ? allFresh.map(i=>{
+    const check = DB.freshProduceChecks.find(c=>c.itemId===i.id && c.date===today);
+    return `<div class="team-row">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">${check?'✅':'⬜'}</span>
+        <div><p style="font-size:13px;font-weight:600;margin:0;${check?'color:var(--text-muted);':''}">${i.name}</p>${check?`<p style="font-size:11px;color:var(--text-muted);margin:0;">Checked by ${check.checkedBy}</p>`:''}</div>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and managers can include an item from the item edit screen in Inventory.</div>`;
+
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce To Buy</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
   <div class="screen" style="padding-top:0;">
+    <div class="section-title">🛒 To buy today</div>
     <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Only fresh produce items that are urgently low show up here.</p>
     <div class="card" style="padding:6px 16px;">${taggedRows}</div>
+    <div class="section-title">🔍 Quality check status</div>
+    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Checked while counting each item in Inventory. This list is view-only.</p>
+    <div class="card" style="padding:6px 16px;">${qualityRows}</div>
   </div>`;
 }
 function renderChecklistManage(){
@@ -3759,8 +3801,8 @@ function confirmResetAllData(){
 }
 function resetAllData(){
   const owners = DB.users.filter(u=>u.role==='owner');
-  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[] };
-  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks']);
+  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[] };
+  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks','freshProduceChecks']);
   ui.modal = null;
   ui.screen = 'main'; ui.tab = 'home';
   showToast('All data has been reset');

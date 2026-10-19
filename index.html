@@ -760,8 +760,8 @@ function openItemEditModal(itemId){
   const subId = item ? item.subId : (loc && loc.subs[0] ? loc.subs[0].id : null);
   ui.modal = {
     type:'item-form', itemId,
-    draft: item ? {name:item.name, brand:item.brand||'', supplier:item.supplier||'', supplierPhone:item.supplierPhone||'', supplierNote:item.supplierNote||'', unit:item.unit, qty:item.qty, low:item.low||0, urgent:item.urgent||0, photo:item.photo||null, usage:item.usage||'', pinned:item.pinned||false, freshProduce:item.freshProduce||false}
-                : {name:'', brand:'', supplier:'', supplierPhone:'', supplierNote:'', unit:'pcs', qty:0, low:0, urgent:0, photo:null, usage:'', pinned:false, freshProduce:false},
+    draft: item ? {name:item.name, brand:item.brand||'', supplier:item.supplier||'', supplierPhone:item.supplierPhone||'', supplierNote:item.supplierNote||'', unit:item.unit, qty:item.qty, low:item.low||0, urgent:item.urgent||0, photo:item.photo||null, usage:item.usage||'', pinned:item.pinned||false, freshProduce:item.freshProduce||false, trackOpened:item.trackOpened||false}
+                : {name:'', brand:'', supplier:'', supplierPhone:'', supplierNote:'', unit:'pcs', qty:0, low:0, urgent:0, photo:null, usage:'', pinned:false, freshProduce:false, trackOpened:false},
     selectedCat: catId, selectedSub: subId
   };
   render();
@@ -871,6 +871,32 @@ function setItemQtyDirect(itemId, value){
   if(!isNaN(v)) item.qty = Math.max(0, Math.round(v*100)/100);
   render();
 }
+function escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function setItemOpened(itemId, field, value){
+  const item = DB.items.find(i=>i.id===itemId);
+  if(!item) return;
+  if(field==='qty'){
+    const v = parseFloat(value);
+    item.openedQty = isNaN(v) ? 0 : Math.max(0, Math.round(v*100)/100);
+  } else {
+    item.openedNote = String(value||'').trim().slice(0,60);
+  }
+  item.openedBy = currentUser().name;
+  item.openedAt = Date.now();
+}
+function openedTag(i){
+  if(!i.trackOpened) return '';
+  const q = i.openedQty||0, note = i.openedNote||'';
+  if(!q && !note) return '';
+  return ' · ' + q + ' opened' + (note ? ' (' + escHtml(note) + ')' : '');
+}
+function groupOpenedTag(items){
+  const opened = items.filter(i=>i.trackOpened && ((i.openedQty||0) || i.openedNote));
+  if(!opened.length) return '';
+  const q = Math.round(opened.reduce((s,i)=>s+(i.openedQty||0),0)*100)/100;
+  const notes = opened.map(i=>i.openedNote).filter(Boolean).map(escHtml);
+  return ' · ' + q + ' opened' + (notes.length ? ' (' + notes.join(', ') + ')' : '');
+}
 function commitItemQty(itemId){
   const item = DB.items.find(i=>i.id===itemId);
   if(!item) return;
@@ -896,6 +922,7 @@ function syncItemDraftFromDOM(){
   if(g('it-usage')) d.usage = g('it-usage').value;
   if(g('it-pinned')) d.pinned = g('it-pinned').checked;
   if(g('it-fresh')) d.freshProduce = g('it-fresh').checked;
+  if(g('it-track-opened')) d.trackOpened = g('it-track-opened').checked;
 }
 function onCategorySelectChange(value){
   syncItemDraftFromDOM();
@@ -957,10 +984,10 @@ function saveNewOrEditedItem(){
   if(ui.modal.itemId){
     const item = DB.items.find(i=>i.id===ui.modal.itemId);
     Object.assign(item, {name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, photo:d.photo, usage:d.usage.trim(), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub});
-    if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; item.freshProduce = d.freshProduce; }
+    if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; item.freshProduce = d.freshProduce; item.trackOpened = d.trackOpened; }
     logActivity(`edited item ${name}`);
   } else {
-    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false});
+    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false, trackOpened:isMgr(u)?d.trackOpened:false});
     logActivity(`added new item ${name}`);
   }
   persist(['items']);
@@ -1910,7 +1937,7 @@ function renderStock(){
         const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
         return `<div class="item-row" onclick="openItemModal('${i.id}')">
           <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
-            <div><p class="item-name">${i.name}</p><p class="item-meta">${loc?loc.name:''} · ${i.qty} ${i.unit}</p></div>
+            <div><p class="item-name">${i.name}</p><p class="item-meta">${loc?loc.name:''} · ${i.qty} ${i.unit}${openedTag(i)}</p></div>
           </div>
           <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
         </div>`;
@@ -1924,7 +1951,7 @@ function renderStock(){
       const idsCsv = group.map(i=>i.id).join(',');
       return `<div class="item-row" onclick="openItemGroupModal('${idsCsv}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>
-          <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total</p></div>
+          <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total${groupOpenedTag(group)}</p></div>
         </div>
         <span class="badge ${statusBadgeClass(worst)}">${statusLabel(worst)}</span>
       </div>`;
@@ -1942,7 +1969,7 @@ function renderStock(){
       </div>` : '';
       return `<div class="item-row" onclick="openItemModal('${i.id}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
-          <div><p class="item-name">${i.name}</p><p class="item-meta">${sub?sub.name:''} · ${i.qty} ${i.unit}</p></div>
+          <div><p class="item-name">${i.name}</p><p class="item-meta">${sub?sub.name:''} · ${i.qty} ${i.unit}${openedTag(i)}</p></div>
         </div>
         <div style="display:flex;align-items:center;">
           <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
@@ -2622,6 +2649,17 @@ function renderItemQtyModal(){
         <div><p style="font-size:13px;font-weight:600;margin:0;">🥬 Checked condition/freshness today</p>${todayCheck?`<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Checked by ${todayCheck.checkedBy}</p>`:''}</div>
       </div>
     </div>` : '';
+
+  const openedBlock = item.trackOpened ? `
+    <div class="card" style="margin:14px 0 0;padding:12px 14px;">
+      <p style="font-size:13px;font-weight:600;margin:0 0 8px;">Opened</p>
+      <div style="display:flex;gap:8px;">
+        <input type="number" min="0" step="1" value="${item.openedQty||''}" placeholder="0" style="width:72px;text-align:center;border:1px solid var(--border);border-radius:10px;padding:8px 4px;background:var(--surface);" onchange="setItemOpened('${item.id}','qty',this.value)" />
+        <input type="text" maxlength="60" value="${escHtml(item.openedNote)}" placeholder="How much is left, e.g. half brick" style="flex:1;min-width:0;border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);" onchange="setItemOpened('${item.id}','note',this.value)" />
+      </div>
+      <p style="font-size:11px;color:var(--text-muted);margin:6px 0 0;">Number of opened ${item.unit} and how much is left. Doesn't change the count above.${item.openedBy?` Last updated by ${escHtml(item.openedBy)}.`:''}</p>
+    </div>` : '';
+
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
     <div class="modal-sheet">
       ${photoBlock}
@@ -2635,6 +2673,7 @@ function renderItemQtyModal(){
       </div>
       <p style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:-8px;">${item.unit}</p>
       ${freshCheckBlock}
+      ${openedBlock}
       <div class="modal-row-actions">
         <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn" onclick="commitItemQty('${item.id}')">Save count</button>
@@ -2649,13 +2688,14 @@ function renderItemGroupModal(){
   if(!items.length) return '';
   const total = Math.round(items.reduce((sum,i)=>sum+i.qty,0)*100)/100;
   const first = items[0];
+  const openedSummary = groupOpenedTag(items).replace(/^ · /,'');
   const rows = items.map(i=>{
     const loc = DB.locations.find(l=>l.id===i.locId);
     const sub = loc ? loc.subs.find(s=>s.id===i.subId) : null;
     const s = itemStatus(i);
     return `<div class="item-row" onclick="closeModal();openItemModal('${i.id}');">
       <div class="item-left"><span class="status-dot ${statusDotClass(s)}"></span>
-        <div><p class="item-name">${loc?loc.name:''}${sub?' · '+sub.name:''}</p><p class="item-meta">${i.qty} ${i.unit}</p></div>
+        <div><p class="item-name">${loc?loc.name:''}${sub?' · '+sub.name:''}</p><p class="item-meta">${i.qty} ${i.unit}${openedTag(i)}</p></div>
       </div>
       <span class="badge ${statusBadgeClass(s)}">${statusLabel(s)}</span>
     </div>`;
@@ -2664,7 +2704,7 @@ function renderItemGroupModal(){
     <div class="modal-sheet">
       <p class="modal-title" style="text-align:center;margin-bottom:2px;">${first.name}</p>
       <p style="text-align:center;font-size:26px;font-weight:700;margin:4px 0;">${total} ${first.unit}</p>
-      <p style="text-align:center;font-size:12px;color:var(--text-muted);margin:0 0 14px;">Total across ${items.length} locations</p>
+      <p style="text-align:center;font-size:12px;color:var(--text-muted);margin:0 0 14px;">Total across ${items.length} locations${openedSummary?' · '+openedSummary:''}</p>
       <div class="card" style="padding:6px 12px;">${rows}</div>
       <button type="button" class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Close</button>
     </div>
@@ -2716,7 +2756,12 @@ function renderItemFormModal(){
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;cursor:pointer;">
         <input id="it-fresh" type="checkbox" ${d.freshProduce?'checked':''} style="width:18px;height:18px;" />
         🥬 Include in Fresh Produce
-      </label>` : `<p class="mgr-note">Low-stock reminders are set by a manager or owner.</p>`}
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;cursor:pointer;">
+        <input id="it-track-opened" type="checkbox" ${d.trackOpened?'checked':''} style="width:18px;height:18px;" />
+        Can be opened (record opened items when counting)
+      </label>
+` : `<p class="mgr-note">Low-stock reminders are set by a manager or owner.</p>`}
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn" onclick="saveNewOrEditedItem()">Save</button>
@@ -3005,7 +3050,7 @@ function renderMorningPriority(){
       const idsCsv = group.map(i=>i.id).join(',');
       return `<div class="item-row" onclick="openItemGroupModal('${idsCsv}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>
-          <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total</p></div>
+          <div><p class="item-name">${first.name}</p><p class="item-meta">${group.length} locations · ${total} ${first.unit} total${groupOpenedTag(group)}</p></div>
         </div>
         <div style="display:flex;align-items:center;">
           <span class="badge ${statusBadgeClass(worst)}">${statusLabel(worst)}</span>

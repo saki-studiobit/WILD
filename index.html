@@ -2150,6 +2150,50 @@ async function saveResetPassword(){
   showToast(`Password reset for ${m.name}`);
   closeModal();
 }
+async function verifyPassword(user, pw){
+  if(user.passwordHash && user.salt) return (await hashPassword(pw, user.salt)) === user.passwordHash;
+  return user.password != null && user.password === pw;
+}
+function openChangePasswordModal(){
+  ui.modal = {type:'change-password-form'};
+  render();
+}
+function renderChangePasswordModal(){
+  const eye = (id) => `<button type="button" onclick="togglePasswordVisibility('${id}', this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;padding:6px;">Show</button>`;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Change password</p>
+      <div class="field"><label>Current password</label>
+        <div style="position:relative;"><input id="cp-current" type="password" placeholder="Current password" style="padding-right:56px;" />${eye('cp-current')}</div>
+      </div>
+      <div class="field"><label>New password</label>
+        <div style="position:relative;"><input id="cp-new" type="password" placeholder="New password" style="padding-right:56px;" />${eye('cp-new')}</div>
+      </div>
+      <p id="cp-error" style="color:var(--urgent);font-size:12px;margin:0 0 8px;min-height:14px;"></p>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveChangePassword()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveChangePassword(){
+  const errEl = document.getElementById('cp-error');
+  const current = document.getElementById('cp-current').value;
+  const next = document.getElementById('cp-new').value;
+  const u = currentUser();
+  if(!current || !next){ errEl.textContent = 'Fill in both fields.'; return; }
+  if(!(await verifyPassword(u, current))){ errEl.textContent = 'Current password is incorrect.'; return; }
+  if(next.length < 4){ errEl.textContent = 'New password must be at least 4 characters.'; return; }
+  const salt = generateSalt();
+  u.salt = salt;
+  u.passwordHash = await hashPassword(next, salt);
+  delete u.password;
+  persist(['users']);
+  logActivity(`changed their own password`);
+  showToast('Password changed');
+  closeModal();
+}
 function renderActivityLog(){
   const rows = DB.activity.length ? DB.activity.map(a=>`
     <div class="activity-row"><p class="activity-text"><strong>${a.user}</strong> ${a.text}</p><p class="activity-time">${new Date(a.ts).toLocaleString()}</p></div>
@@ -2381,6 +2425,10 @@ function renderProfile(){
       <div><p style="font-size:13px;font-weight:600;margin:0;">Contact number</p><p style="font-size:12px;color:var(--text-muted);margin:2px 0 0;">${u.phone || 'Not set'}</p></div>
       <button class="link-btn" onclick="openPhoneModal()">${u.phone ? 'Edit' : 'Add'}</button>
     </div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Password</p><p style="font-size:12px;color:var(--text-muted);margin:2px 0 0;">Change your own login password</p></div>
+      <button class="link-btn" onclick="openChangePasswordModal()">Change</button>
+    </div>
     ${scheduleCard}
     ${reportsCard}
     ${other ? `<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="switchDemoUser('${other.id}')">Switch to ${other.role} view (${other.name})</button>` : ''}
@@ -2424,6 +2472,7 @@ function renderModal(){
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
   if(ui.modal.type==='confirm-dialog') return renderConfirmModal();
   if(ui.modal.type==='reset-password-form') return renderResetPasswordModal();
+  if(ui.modal.type==='change-password-form') return renderChangePasswordModal();
   if(ui.modal.type==='reset-all-data-confirm') return renderResetAllDataModal();
   if(ui.modal.type==='prompt-dialog') return renderPromptModal();
   return '';

@@ -1419,7 +1419,18 @@ function deleteRecipe(recipeId){
   closeModal();
 }
 /* ---------- recipe CSV import ---------- */
-function parseCSV(text){
+function detectDelimiter(text){
+  const first = text.split(/\r\n|\n|\r/)[0] || '';
+  let best = ',', max = 0;
+  [',',';','\t'].forEach(d=>{
+    let n = 0, q = false;
+    for(const ch of first){ if(ch==='"') q = !q; else if(ch===d && !q) n++; }
+    if(n > max){ max = n; best = d; }
+  });
+  return best;
+}
+function parseCSV(text, delim){
+  delim = delim || ',';
   const rows = []; let row = []; let field = ''; let inQuotes = false;
   for(let i=0;i<text.length;i++){
     const c = text[i];
@@ -1428,7 +1439,7 @@ function parseCSV(text){
       else field += c;
     } else {
       if(c==='"') inQuotes = true;
-      else if(c===','){ row.push(field); field=''; }
+      else if(c===delim){ row.push(field); field=''; }
       else if(c==='\n' || c==='\r'){
         if(c==='\r' && text[i+1]==='\n') i++;
         row.push(field); field=''; rows.push(row); row=[];
@@ -1436,7 +1447,60 @@ function parseCSV(text){
     }
   }
   if(field.length || row.length){ row.push(field); rows.push(row); }
-  return rows.filter(r=>r.length>1 || r[0]!=='');
+  return rows.filter(r=>r.some(x=>String(x).trim()!==''));
+}
+function csvNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function csvCol(header, aliases){
+  for(let i=0;i<header.length;i++){ if(aliases.includes(header[i])) return i; }
+  return -1;
+}
+function csvNum(v){ const n = parseFloat(String(v==null?'':v).replace(/,/g,'')); return isNaN(n) ? 0 : n; }
+function showImportResult(title, lines, ok){
+  ui.modal = {type:'import-result', title, lines, ok};
+  render();
+}
+function renderImportResultModal(){
+  const m = ui.modal;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title" style="${m.ok?'':'color:var(--urgent);'}">${escHtml(m.title)}</p>
+      ${m.lines.map(l=>`<p style="font-size:13px;margin:0 0 6px;">${escHtml(l)}</p>`).join('')}
+      <div class="modal-row-actions"><button type="button" class="btn" onclick="closeModal()">Done</button></div>
+    </div>
+  </div>`;
+}
+/* Reads a chosen CSV file, handles a leading BOM and comma/semicolon/tab files, then calls handler(rows, header). */
+function readCsvForImport(e, kind, handler){
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  if(/\.xlsx?$/i.test(file.name)){
+    showImportResult("That's an Excel file", ['Please save it as CSV first: in Excel choose File > Save As > CSV, then import that file.'], false);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = function(){ showImportResult("Couldn't read the file", ['Please try again, or save the file as CSV and pick it again.'], false); };
+  reader.onload = function(ev){
+    try{
+      const text = String(ev.target.result||'').replace(/^\uFEFF/, '');
+      const rows = parseCSV(text, detectDelimiter(text));
+      if(rows.length < 2){
+        showImportResult(`No ${kind} found`, ['The file is empty or only has a header row. Add at least one row under the column names.'], false);
+        return;
+      }
+      handler(rows, rows[0].map(h=>String(h).trim()), rows[0].map(csvNorm));
+    }catch(err){
+      showImportResult('Something went wrong', ['The file could not be read as a CSV. Download the template, fill it in, and try again.'], false);
+    }
+  };
+  reader.readAsText(file);
+}
+function missingColumnResult(kind, rawHeader, accepted){
+  showImportResult(`Can't find the ${kind} column`, [
+    `Columns found in your file: ${rawHeader.join(', ')}`,
+    `The ${kind} column should be named one of: ${accepted.join(', ')}.`,
+    'Rename that column in your file, or download the template and copy your data into it.'
+  ], false);
 }
 function downloadRecipeTemplate(){
   downloadCSV('recipe-template.csv', ['Name','Category','Ingredients','Instructions'], [
@@ -1445,72 +1509,65 @@ function downloadRecipeTemplate(){
   ]);
 }
 function importRecipeCSV(e){
-  const file = e.target.files[0];
-  e.target.value = '';
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = function(ev){
-    const rows = parseCSV(ev.target.result);
-    if(rows.length<2){ showToast('No recipe rows found in that file'); return; }
-    const header = rows[0].map(h=>h.trim().toLowerCase());
-    const nameIdx = header.indexOf('name');
-    const catIdx = header.indexOf('category');
-    const ingIdx = header.indexOf('ingredients');
-    const insIdx = header.indexOf('instructions');
-    if(nameIdx===-1 || ingIdx===-1){ showToast('CSV needs at least Name and Ingredients columns'); return; }
-    let count = 0;
+  readCsvForImport(e, 'recipes', (rows, rawHeader, header)=>{
+    const nameIdx = csvCol(header, ['name','recipe','recipe name','dish','dish name','menu item']);
+    const catIdx = csvCol(header, ['category','type','menu category']);
+    const ingIdx = csvCol(header, ['ingredients','ingredient','ingredient list']);
+    const insIdx = csvCol(header, ['instructions','instruction','method','steps','directions','procedure']);
+    if(nameIdx===-1){ missingColumnResult('recipe name', rawHeader, ['Name','Recipe','Dish']); return; }
+    if(ingIdx===-1){ missingColumnResult('ingredients', rawHeader, ['Ingredients','Ingredient']); return; }
+    let added = 0, dupes = 0, noName = 0, noIng = 0;
     for(let i=1;i<rows.length;i++){
       const r = rows[i];
       const name = (r[nameIdx]||'').trim();
-      if(!name) continue;
+      if(!name){ noName++; continue; }
       const catRaw = catIdx>-1 ? (r[catIdx]||'').trim() : '';
       const category = RECIPE_CATEGORIES.find(c=>c.toLowerCase()===catRaw.toLowerCase()) || 'Food';
-      const ingredients = (r[ingIdx]||'').split('|').map(s=>s.trim()).filter(Boolean);
-      const instructions = insIdx>-1 ? (r[insIdx]||'').split('|').map(s=>s.trim()).filter(Boolean).join('\n') : '';
-      if(!ingredients.length) continue;
+      const ingredients = (r[ingIdx]||'').split(/\||\n/).map(s=>s.trim()).filter(Boolean);
+      const instructions = insIdx>-1 ? (r[insIdx]||'').split(/\||\n/).map(s=>s.trim()).filter(Boolean).join('\n') : '';
+      if(!ingredients.length){ noIng++; continue; }
+      if(DB.recipes.some(x=>x.name.trim().toLowerCase()===name.toLowerCase())){ dupes++; continue; }
       DB.recipes.push({id:uid('rc'), name, category, ingredients, instructions});
-      count++;
+      added++;
     }
-    persist(['recipes']);
-    logActivity(`imported ${count} recipe(s) from CSV`);
-    showToast(`Imported ${count} recipe(s)`);
-    render();
-  };
-  reader.readAsText(file);
+    if(added) persist(['recipes']);
+    logActivity(`imported ${added} recipe(s) from CSV`);
+    const lines = [`Added ${added} recipe${added===1?'':'s'}.`];
+    if(dupes) lines.push(`Skipped ${dupes} that already exist (same name).`);
+    if(noIng) lines.push(`Skipped ${noIng} with no ingredients.`);
+    if(noName) lines.push(`Skipped ${noName} row${noName===1?'':'s'} with no name.`);
+    showImportResult(added ? 'Import finished' : 'Nothing was added', lines, added>0);
+  });
 }
 function downloadInventoryTemplate(){
-  downloadCSV('inventory-template.csv', ['Name','Category','Location','Brand','Unit','Starting Count','Low Stock Reminder','Usage'], [
-    ['Ground beef','Kitchen','Freezer','','kg','6','4','Burgers, tacos'],
-    ['Oat milk','Cafe counter','Under counter','Brand X','L','5','2','Lattes, cappuccinos'],
+  downloadCSV('inventory-template.csv', ['Name','Category','Location','Brand','Unit','Starting Count','Low Stock Reminder','Urgent Stock Reminder','Supplier','Supplier Phone','Usage'], [
+    ['Ground beef','Kitchen','Freezer','','kg','6','4','2','Manila Meat Traders','0917 123 4567','Burgers, tacos'],
+    ['Oat milk','Cafe counter','Under counter','Brand X','L','5','2','1','','','Lattes, cappuccinos'],
   ]);
 }
 function importInventoryCSV(e){
-  const file = e.target.files[0];
-  e.target.value = '';
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = function(ev){
-    const rows = parseCSV(ev.target.result);
-    if(rows.length<2){ showToast('No item rows found in that file'); return; }
-    const header = rows[0].map(h=>h.trim().toLowerCase());
-    const nameIdx = header.indexOf('name');
-    const catIdx = header.indexOf('category');
-    const locIdx = header.indexOf('location');
-    const brandIdx = header.indexOf('brand');
-    const unitIdx = header.indexOf('unit');
-    const qtyIdx = header.indexOf('starting count');
-    const lowIdx = header.indexOf('low stock reminder');
-    const usageIdx = header.indexOf('usage');
-    if(nameIdx===-1 || catIdx===-1){ showToast('CSV needs at least Name and Category columns'); return; }
-    let count = 0;
+  readCsvForImport(e, 'items', (rows, rawHeader, header)=>{
+    const nameIdx = csvCol(header, ['name','item','item name','product','product name','items']);
+    const catIdx = csvCol(header, ['category','main category','group','type']);
+    const locIdx = csvCol(header, ['location','storage','storage area','shelf','sub category','subcategory','area']);
+    const brandIdx = csvCol(header, ['brand']);
+    const unitIdx = csvCol(header, ['unit','units','uom','unit of measure']);
+    const qtyIdx = csvCol(header, ['starting count','count','qty','quantity','stock','on hand','current stock','current count']);
+    const lowIdx = csvCol(header, ['low stock reminder','low stock','low','reorder level','reorder point','minimum','min']);
+    const urgentIdx = csvCol(header, ['urgent stock reminder','urgent stock','urgent','critical']);
+    const supIdx = csvCol(header, ['supplier','vendor']);
+    const supPhoneIdx = csvCol(header, ['supplier phone','supplier number','supplier contact','vendor phone','vendor number']);
+    const usageIdx = csvCol(header, ['usage','used for','notes','note','description']);
+    if(nameIdx===-1){ missingColumnResult('item name', rawHeader, ['Name','Item','Item Name','Product']); return; }
+    let added = 0, dupes = 0, noName = 0;
+    const newCats = [];
     for(let i=1;i<rows.length;i++){
       const r = rows[i];
       const name = (r[nameIdx]||'').trim();
-      if(!name) continue;
-      const catName = (r[catIdx]||'').trim();
-      if(!catName) continue;
+      if(!name){ noName++; continue; }
+      const catName = (catIdx>-1 ? (r[catIdx]||'').trim() : '') || 'General';
       let loc = DB.locations.find(l=>l.name.toLowerCase()===catName.toLowerCase());
-      if(!loc){ loc = {id:uid('loc'), name:catName, subs:[]}; DB.locations.push(loc); }
+      if(!loc){ loc = {id:uid('loc'), name:catName, subs:[]}; DB.locations.push(loc); newCats.push(catName); }
       const subName = locIdx>-1 ? (r[locIdx]||'').trim() : '';
       let sub;
       if(subName){
@@ -1520,20 +1577,28 @@ function importInventoryCSV(e){
         if(!loc.subs.length){ sub = {id:uid('sub'), name:'General'}; loc.subs.push(sub); }
         else sub = loc.subs[0];
       }
+      if(DB.items.some(x=>x.locId===loc.id && x.subId===sub.id && x.name.trim().toLowerCase()===name.toLowerCase())){ dupes++; continue; }
       const brand = brandIdx>-1 ? (r[brandIdx]||'').trim() : '';
       const unit = (unitIdx>-1 ? (r[unitIdx]||'').trim() : '') || 'pcs';
-      const qty = qtyIdx>-1 ? (parseFloat(r[qtyIdx])||0) : 0;
-      const low = lowIdx>-1 ? (parseFloat(r[lowIdx])||0) : 0;
+      const qty = qtyIdx>-1 ? csvNum(r[qtyIdx]) : 0;
+      const low = lowIdx>-1 ? csvNum(r[lowIdx]) : 0;
+      const urgent = urgentIdx>-1 ? csvNum(r[urgentIdx]) : 0;
+      const supplier = supIdx>-1 ? (r[supIdx]||'').trim() : '';
+      const supplierPhone = supPhoneIdx>-1 ? (r[supPhoneIdx]||'').trim() : '';
       const usage = usageIdx>-1 ? (r[usageIdx]||'').trim() : '';
-      DB.items.push({id:uid('it'), locId:loc.id, subId:sub.id, name, brand, photo:null, usage, unit, qty, low, urgent:0, pinned:false});
-      count++;
+      DB.items.push({id:uid('it'), locId:loc.id, subId:sub.id, name, brand, supplier, supplierPhone, supplierNote:'', photo:null, usage, unit, qty, low, urgent, pinned:false});
+      added++;
     }
-    persist(['items','locations']);
-    logActivity(`imported ${count} item(s) from CSV`);
-    showToast(`Imported ${count} item(s)`);
-    render();
-  };
-  reader.readAsText(file);
+    if(added || newCats.length) persist(['items','locations']);
+    logActivity(`imported ${added} item(s) from CSV`);
+    const lines = [`Added ${added} item${added===1?'':'s'}.`];
+    const uniqCats = [...new Set(newCats)];
+    if(uniqCats.length) lines.push(`New categories created: ${uniqCats.join(', ')}.`);
+    if(catIdx===-1) lines.push('Your file had no Category column, so items were put under "General". You can move them later.');
+    if(dupes) lines.push(`Skipped ${dupes} that already exist in the same place (same name).`);
+    if(noName) lines.push(`Skipped ${noName} row${noName===1?'':'s'} with no name.`);
+    showImportResult(added ? 'Import finished' : 'Nothing was added', lines, added>0);
+  });
 }
 
 /* ---------- team actions ---------- */
@@ -2437,6 +2502,7 @@ function renderModal(){
   if(ui.modal.type==='checklist-new') return renderNewChecklistModal();
   if(ui.modal.type==='phone-form') return renderPhoneModal();
   if(ui.modal.type==='name-form') return renderNameModal();
+  if(ui.modal.type==='import-result') return renderImportResultModal();
   if(ui.modal.type==='expense-form') return renderExpenseFormModal();
   if(ui.modal.type==='online-form') return renderOnlineFormModal();
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();

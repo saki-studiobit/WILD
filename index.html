@@ -213,7 +213,7 @@ function saveLocal(key, val){
 }
 
 /* ---------- app state ---------- */
-let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[] };
+let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[] };
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
@@ -258,11 +258,13 @@ async function init(){
   DB.salesReports = await loadShared('inv_salesreports', []);
   DB.shoppingMarks = await loadShared('inv_shoppingmarks', []);
   DB.freshProduceChecks = await loadShared('inv_freshproducechecks', []);
+  DB.deliveries = await loadShared('inv_deliveries', []);
   trimOldAttendance();
   trimOldAttendancePhotos();
   trimOldNotes();
   trimOldSalesReports();
   trimOldChecklistRuns();
+  trimOldDeliveries();
   session = await loadLocal('inv_session', {userId:null});
   ui.screen = (session.userId && currentUser()) ? 'main' : 'auth';
   render();
@@ -290,6 +292,7 @@ function persist(keys){
   if(keys.includes('salesReports')) saveShared('inv_salesreports', DB.salesReports);
   if(keys.includes('shoppingMarks')) saveShared('inv_shoppingmarks', DB.shoppingMarks);
   if(keys.includes('freshProduceChecks')) saveShared('inv_freshproducechecks', DB.freshProduceChecks);
+  if(keys.includes('deliveries')) saveShared('inv_deliveries', DB.deliveries);
 }
 
 function logActivity(text){
@@ -1000,11 +1003,11 @@ function saveNewOrEditedItem(){
   const u = currentUser();
   if(ui.modal.itemId){
     const item = DB.items.find(i=>i.id===ui.modal.itemId);
-    Object.assign(item, {name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, photo:d.photo, usage:d.usage.trim(), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub});
+    Object.assign(item, {name, brand:d.brand.trim(), supplier:canonicalSupplier(d.supplier), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, photo:d.photo, usage:d.usage.trim(), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub});
     if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; item.freshProduce = d.freshProduce; item.trackOpened = d.trackOpened; }
     logActivity(`edited item ${name}`);
   } else {
-    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:d.supplier.trim(), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false, trackOpened:isMgr(u)?d.trackOpened:false});
+    DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:canonicalSupplier(d.supplier), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false, trackOpened:isMgr(u)?d.trackOpened:false});
     logActivity(`added new item ${name}`);
   }
   persist(['items']);
@@ -1583,7 +1586,7 @@ function importInventoryCSV(e){
       const qty = qtyIdx>-1 ? csvNum(r[qtyIdx]) : 0;
       const low = lowIdx>-1 ? csvNum(r[lowIdx]) : 0;
       const urgent = urgentIdx>-1 ? csvNum(r[urgentIdx]) : 0;
-      const supplier = supIdx>-1 ? (r[supIdx]||'').trim() : '';
+      const supplier = supIdx>-1 ? canonicalSupplier(r[supIdx]) : '';
       const supplierPhone = supPhoneIdx>-1 ? (r[supPhoneIdx]||'').trim() : '';
       const usage = usageIdx>-1 ? (r[usageIdx]||'').trim() : '';
       DB.items.push({id:uid('it'), locId:loc.id, subId:sub.id, name, brand, supplier, supplierPhone, supplierNote:'', photo:null, usage, unit, qty, low, urgent, pinned:false});
@@ -1694,6 +1697,9 @@ function render(){
   if(ui.screen==='checklist-hub'){ body = renderChecklistHub(); app.innerHTML = body; return; }
   if(ui.screen==='morning-priority'){ body = renderMorningPriority(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='fresh-produce'){ body = renderFreshProduce(); app.innerHTML = body; return; }
+  if(ui.screen==='receive-delivery'){ body = renderReceiveDelivery(); app.innerHTML = body; return; }
+  if(ui.screen==='delivery-saved'){ body = renderDeliverySaved(); app.innerHTML = body; return; }
+  if(ui.screen==='deliveries'){ body = renderDeliveries(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='checklist-run'){ body = renderChecklistRun(); app.innerHTML = body; return; }
   if(ui.screen==='checklist-manage'){ body = renderChecklistManage(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='checklist-edit'){ body = renderChecklistEdit(); app.innerHTML = body + renderModal(); return; }
@@ -1916,6 +1922,8 @@ function renderHome(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openReceiveDelivery()">🚚 Receive delivery</button>
+    ${isMgr(u) ? `<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openDeliveriesScreen()">🧾 Deliveries</button>` : ''}
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
@@ -1949,6 +1957,7 @@ function renderHome(){
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
+      <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openDeliveriesScreen()">🧾 Deliveries</button>
       <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Staff Daily Tasks</button>
       <button class="btn btn-secondary" style="margin-bottom:16px;" onclick="openWastageLogScreen()">🗑 Wastage Report</button>
       <div class="section-title">Team</div>
@@ -2503,7 +2512,10 @@ function renderModal(){
   if(ui.modal.type==='phone-form') return renderPhoneModal();
   if(ui.modal.type==='name-form') return renderNameModal();
   if(ui.modal.type==='import-result') return renderImportResultModal();
+  if(ui.modal.type==='delivery-edit') return renderDeliveryEditModal();
+  if(ui.modal.type==='deliveries-download-form') return renderDeliveriesDownloadModal();
   if(ui.modal.type==='expense-form') return renderExpenseFormModal();
+  if(ui.modal.type==='expense-edit') return renderExpenseEditModal();
   if(ui.modal.type==='online-form') return renderOnlineFormModal();
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
@@ -2821,7 +2833,7 @@ function renderItemFormModal(){
         </div>
         <input id="it-brand" value="${d.brand}" placeholder="Brand (optional)" />
       </div>
-      <div class="field"><label>Supplier (optional)</label><input id="it-supplier" value="${d.supplier||''}" placeholder="e.g. Manila Meat Traders" /></div>
+      <div class="field"><label>Supplier (optional)</label><input id="it-supplier" list="supplier-list" value="${escHtml(d.supplier||'')}" placeholder="e.g. Manila Meat Traders" autocomplete="off" /><datalist id="supplier-list">${supplierOptionsHtml()}</datalist></div>
       <div class="field"><label>Supplier phone (optional)</label><input id="it-supplier-phone" type="tel" value="${d.supplierPhone||''}" placeholder="e.g. 0917 123 4567" /></div>
       <div class="field"><label>Where/how to order (optional)</label><input id="it-supplier-note" value="${d.supplierNote||''}" placeholder="e.g. Order via Viber, call before 10am" /></div>
       <div class="field"><label>What's this used for?</label><textarea id="it-usage" rows="2" placeholder="e.g. Toppings for iced drinks, breakfast sandwiches..." style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font-size:14px;font-family:inherit;">${d.usage||''}</textarea></div>
@@ -3303,6 +3315,8 @@ function ensureSalesReport(date){
   return r;
 }
 function expensesTotal(r){ return r.expenses.reduce((s,e)=>s+e.amount,0); }
+function drawerExpensesTotal(r){ return r.expenses.filter(e=>!e.noDrawer).reduce((s,e)=>s+e.amount,0); }
+function cashSalesOf(r){ return cashDrawerTotal(r) - (r.cashFunds||0) + drawerExpensesTotal(r); }
 function cashDrawerTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashDrawer[d]||0),0); }
 function cashFundsBreakdownTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashFundsBreakdown[d]||0),0); }
 function onlineSalesTotal(r){ return r.online.reduce((s,e)=>s+e.amount,0); }
@@ -3371,7 +3385,7 @@ function renderSalesReport(){
     </div>`;
   }
 
-  const cashSales = cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+  const cashSales = cashSalesOf(r);
   const totalSales = cashSales + onlineSalesTotal(r);
 
   const rows = `
@@ -3448,7 +3462,7 @@ function downloadSalesReportRangeCSV(){
   const rows = [];
   let gCashFunds=0, gDrawer=0, gExpenses=0, gOnline=0, gCashSales=0, gTotal=0;
   reports.forEach(r=>{
-    const cashSales = cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+    const cashSales = cashSalesOf(r);
     const total = cashSales + onlineSalesTotal(r);
     rows.push([r.date, r.cashFunds||0, cashDrawerTotal(r), expensesTotal(r), onlineSalesTotal(r), cashSales, total]);
     gCashFunds += r.cashFunds||0; gDrawer += cashDrawerTotal(r); gExpenses += expensesTotal(r); gOnline += onlineSalesTotal(r); gCashSales += cashSales; gTotal += total;
@@ -3517,10 +3531,10 @@ function renderSalesExpenses(){
   const editable = isSalesReportEditable(date);
   const rows = r.expenses.length ? r.expenses.map(e=>`
     <div class="activity-row" style="display:flex;justify-content:space-between;align-items:center;">
-      <div><p class="activity-text" style="margin:0;">${e.desc}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${e.cat||'Other'}</p></div>
+      <div ${editable?`onclick="openExpenseEdit('${e.id}')" style="cursor:pointer;"`:''}><p class="activity-text" style="margin:0;">${e.desc}${editable?' <span style="font-size:11px;color:var(--accent);">✎</span>':''}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${e.cat||'Other'}${e.deliveryId?' · from delivery'+(e.noDrawer?', not from the cash drawer':''):''}</p></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:13px;font-weight:600;">${peso(e.amount)}</span>
-        ${editable ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteExpense('${e.id}')">✕</button>` : ''}
+        ${editable && !e.deliveryId ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteExpense('${e.id}')">✕</button>` : ''}
       </div>
     </div>`).join('') : `<div class="empty-note">No expenses logged yet.</div>`;
   return `
@@ -3530,6 +3544,50 @@ function renderSalesExpenses(){
     <div class="card">${rows}</div>
     ${editable ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openExpenseFormModal()">+ Add expense</button>` : ''}
   </div>`;
+}
+function openExpenseEdit(id){
+  if(!isSalesReportEditable(ui.salesReportDate)) return;
+  ui.modal={type:'expense-edit', id}; render();
+}
+function renderExpenseEditModal(){
+  const r = ensureSalesReport(ui.salesReportDate);
+  const e = r.expenses.find(x=>x.id===ui.modal.id);
+  if(!e) return '';
+  const fromDl = !!e.deliveryId;
+  const opts = EXPENSE_CATEGORIES.map(c=>`<option value="${c}" ${c===(e.cat||'Other')?'selected':''}>${c}</option>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Edit expense</p>
+      ${fromDl?`<p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">This came from a delivery. You can change the category here. To change the amount, a manager can edit the delivery.</p>`:''}
+      <div class="field"><label>What was it for?</label><input id="exe-desc" value="${escHtml(e.desc)}" ${fromDl?'disabled':''} /></div>
+      <div class="field"><label>Category</label><select id="exe-cat">${opts}</select></div>
+      <div class="field"><label>Amount</label><input id="exe-amount" type="number" step="0.01" value="${e.amount}" ${fromDl?'disabled':''} /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveExpenseEdit()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveExpenseEdit(){
+  const r = ensureSalesReport(ui.salesReportDate);
+  const e = r.expenses.find(x=>x.id===ui.modal.id);
+  if(!e || !isSalesReportEditable(ui.salesReportDate)) return;
+  const cat = document.getElementById('exe-cat').value;
+  if(!e.deliveryId){
+    const desc = document.getElementById('exe-desc').value.trim();
+    const amount = parseFloat(document.getElementById('exe-amount').value)||0;
+    if(!desc){ showToast('Describe the expense'); return; }
+    if(amount<=0){ showToast('Enter an amount'); return; }
+    e.desc = desc; e.amount = amount;
+  } else {
+    const dl = DB.deliveries.find(x=>x.id===e.deliveryId);
+    if(dl){ dl.expenseType = cat; persist(['deliveries']); }
+  }
+  e.cat = cat;
+  persist(['salesReports']);
+  logActivity(`edited expense "${e.desc}" in daily sales report`);
+  closeModal();
 }
 function openExpenseFormModal(){ ui.modal={type:'expense-form'}; render(); }
 const EXPENSE_CATEGORIES = ['Supplies','Utilities','Rent','Gas/Delivery','Staff meals','Repairs','Other'];
@@ -3563,6 +3621,8 @@ function saveExpense(){
 }
 function deleteExpense(id){
   const r = ensureSalesReport(ui.salesReportDate);
+  const ex = r.expenses.find(e=>e.id===id);
+  if(ex && ex.deliveryId) return;
   r.expenses = r.expenses.filter(e=>e.id!==id);
   persist(['salesReports']);
   render();
@@ -3796,7 +3856,7 @@ function salesRangeStats(days){
   const reports = DB.salesReports.filter(r=>r.date>=from && r.date<=to);
   let cash=0, online=0, expenses=0;
   reports.forEach(r=>{
-    cash += cashDrawerTotal(r) - (r.cashFunds||0) + expensesTotal(r);
+    cash += cashSalesOf(r);
     online += onlineSalesTotal(r);
     expenses += expensesTotal(r);
   });
@@ -3913,6 +3973,7 @@ function backupAllData(){
     checklistRuns: DB.checklistRuns,
     notes: DB.notes,
     salesReports: DB.salesReports,
+    deliveries: DB.deliveries,
     settings: DB.settings
   };
   downloadJSON(`backup-${dateStr(new Date())}.json`, payload);
@@ -3943,12 +4004,409 @@ function confirmResetAllData(){
 }
 function resetAllData(){
   const owners = DB.users.filter(u=>u.role==='owner');
-  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[] };
-  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks','freshProduceChecks']);
+  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[] };
+  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks','freshProduceChecks','deliveries']);
   ui.modal = null;
   ui.screen = 'main'; ui.tab = 'home';
   showToast('All data has been reset');
   render();
+}
+
+/* ---------- supplier names ---------- */
+function supplierKey(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function supplierNames(){
+  const seen = {};
+  DB.items.forEach(i=>{
+    const k = supplierKey(i.supplier);
+    if(k && !seen[k]) seen[k] = String(i.supplier).trim().replace(/\s+/g,' ');
+  });
+  return Object.values(seen).sort((a,b)=>a.localeCompare(b));
+}
+function canonicalSupplier(name){
+  const clean = String(name||'').trim().replace(/\s+/g,' ');
+  if(!clean) return '';
+  return supplierNames().find(n=>supplierKey(n)===supplierKey(clean)) || clean;
+}
+function supplierOptionsHtml(){ return supplierNames().map(n=>`<option value="${escHtml(n)}"></option>`).join(''); }
+
+/* ---------- supplier deliveries ---------- */
+const DELIVERY_RETENTION_MS = 30*24*60*60*1000;
+function trimOldDeliveries(){
+  if(DB.settings.autoTrimDeliveries === false) return;
+  const cutoff = dateStr(new Date(Date.now() - DELIVERY_RETENTION_MS));
+  const before = DB.deliveries.length;
+  DB.deliveries = DB.deliveries.filter(d=>d.date >= cutoff);
+  if(DB.deliveries.length !== before) persist(['deliveries']);
+}
+function toggleAutoTrimDeliveries(){
+  if(!isOwner(currentUser())) return;
+  DB.settings.autoTrimDeliveries = (DB.settings.autoTrimDeliveries===false) ? true : false;
+  persist(['settings']);
+  if(DB.settings.autoTrimDeliveries) trimOldDeliveries();
+  render();
+}
+function recvGroupKey(i){ return i.name.trim().toLowerCase()+'|'+i.unit; }
+function recvRowFromItems(items){
+  return {name:items[0].name, unit:items[0].unit, itemIds:items.map(i=>i.id), storeId:items[0].id, qty:''};
+}
+function buildRecvRows(supplier){
+  const key = supplierKey(supplier);
+  const groups = {};
+  DB.items.forEach(i=>{ const g = recvGroupKey(i); (groups[g] = groups[g] || []).push(i); });
+  return Object.values(groups)
+    .filter(items=>items.some(i=>supplierKey(i.supplier)===key))
+    .map(recvRowFromItems)
+    .sort((a,b)=>a.name.localeCompare(b.name));
+}
+function openReceiveDelivery(){
+  ui.recvDraft = {supplier:'', receipt:'', paid:'', rows:[]};
+  ui.deliveryNote = '';
+  ui.screen = 'receive-delivery';
+  render();
+}
+function syncRecvDraft(){
+  const d = ui.recvDraft;
+  if(!d) return;
+  const g = id => document.getElementById(id);
+  if(g('rv-receipt')) d.receipt = g('rv-receipt').value;
+  if(g('rv-paid')) d.paid = g('rv-paid').value;
+  if(g('rv-exptype')) d.expenseType = g('rv-exptype').value;
+  if(g('rv-paidfrom')) d.paidFrom = g('rv-paidfrom').value;
+  d.rows.forEach((r,i)=>{
+    if(g('rv-qty-'+i)) r.qty = g('rv-qty-'+i).value;
+    if(g('rv-store-'+i)) r.storeId = g('rv-store-'+i).value;
+  });
+}
+function onRecvSupplier(v){
+  syncRecvDraft();
+  const d = ui.recvDraft;
+  d.supplier = v;
+  d.rows = (v && v!=='__other__') ? buildRecvRows(v) : [];
+  render();
+}
+function onRecvAdd(key){
+  if(!key) return;
+  syncRecvDraft();
+  const items = DB.items.filter(i=>recvGroupKey(i)===key);
+  if(items.length) ui.recvDraft.rows.push(recvRowFromItems(items));
+  render();
+}
+function itemPlaceLabel(item){
+  const loc = DB.locations.find(l=>l.id===item.locId);
+  const sub = loc ? loc.subs.find(s=>s.id===item.subId) : null;
+  return (loc ? loc.name : '') + (sub ? ' · ' + sub.name : '');
+}
+function syncDeliveryExpense(d){
+  // returns 'ok' | 'none' | 'locked' | 'missing'
+  const date = d.date;
+  let r = findSalesReport(date);
+  const existing = r ? r.expenses.find(e=>e.deliveryId===d.id) : null;
+  if(!(d.paid>0)){
+    if(!existing) return 'none';
+    if(r.reportLocked) return 'locked';
+    r.expenses = r.expenses.filter(e=>e.deliveryId!==d.id);
+    d.expenseLinked = false;
+    persist(['salesReports']);
+    return 'ok';
+  }
+  if(r && r.reportLocked) return 'locked';
+  if(!r) r = ensureSalesReport(date);
+  const desc = 'Delivery: ' + d.supplier + (d.receipt ? ' (' + d.receipt + ')' : '');
+  const exp = existing || {id:uid('exp'), deliveryId:d.id};
+  exp.desc = desc; exp.cat = d.expenseType || 'Supplies'; exp.amount = d.paid; exp.addedBy = d.by; exp.noDrawer = d.paidFrom==='other';
+  if(!existing) r.expenses.push(exp);
+  d.expenseLinked = true;
+  persist(['salesReports']);
+  return 'ok';
+}
+function expenseTypeOptions(sel){ return EXPENSE_CATEGORIES.map(c=>`<option value="${c}" ${c===sel?'selected':''}>${c}</option>`).join(''); }
+const SEL_STYLE = 'width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);';
+function renderTodayDeliveriesBlock(){
+  const today = dateStr(new Date());
+  const list = DB.deliveries.filter(d=>d.date===today).sort((a,b)=>b.ts-a.ts);
+  const rows = list.length ? list.map(d=>{
+    const t = new Date(d.ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    const lines = d.lines.map(l=>`<p style="font-size:12px;margin:2px 0 0;">${escHtml(l.name)} +${l.qty} ${escHtml(l.unit)} <span style="color:var(--text-muted);">· ${escHtml(l.where)}</span></p>`).join('');
+    return `<div style="padding:10px 0;border-top:1px solid var(--border);">
+      <p style="font-size:13px;font-weight:600;margin:0;">${escHtml(d.supplier)}${d.receipt?' · '+escHtml(d.receipt):''}</p>
+      <p style="font-size:11px;color:var(--text-muted);margin:2px 0 4px;">${t} · received by ${escHtml(d.by)}</p>
+      ${lines}
+    </div>`;
+  }).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 4px;">No deliveries logged today yet.</p>`;
+  return `<div class="card" style="margin-top:18px;padding:4px 16px 10px;">
+    <p style="font-size:12px;font-weight:600;color:var(--text-muted);margin:10px 0 0;">TODAY'S DELIVERIES</p>${rows}</div>`;
+}
+function renderReceiveDelivery(){
+  const d = ui.recvDraft || (ui.recvDraft = {supplier:'', receipt:'', paid:'', rows:[]});
+  const names = supplierNames();
+  const supplierOpts = `<option value="">Choose supplier</option>`
+    + names.map(n=>`<option value="${escHtml(n)}" ${supplierKey(n)===supplierKey(d.supplier)?'selected':''}>${escHtml(n)}</option>`).join('')
+    + `<option value="__other__" ${d.supplier==='__other__'?'selected':''}>Other / not listed</option>`;
+  const rowsHtml = d.rows.map((r,i)=>{
+    const entries = r.itemIds.map(id=>DB.items.find(x=>x.id===id)).filter(Boolean);
+    if(!entries.length) return '';
+    const total = Math.round(entries.reduce((s,x)=>s+x.qty,0)*100)/100;
+    const ordered = DB.shoppingMarks.some(m=>m.key===shoppingMarkKey(r.itemIds));
+    const storeHtml = entries.length > 1
+      ? `<p style="font-size:11px;color:var(--text-muted);margin:8px 0 3px;">Where did you store it?</p><select id="rv-store-${i}" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);" aria-label="Where did you store ${escHtml(r.name)}">${entries.map(x=>`<option value="${x.id}" ${x.id===r.storeId?'selected':''}>${escHtml(itemPlaceLabel(x))} (${x.qty} now)</option>`).join('')}</select>`
+      : `<p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">Stored in ${escHtml(itemPlaceLabel(entries[0]))}</p>`;
+    return `<div style="padding:10px 0;border-top:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(r.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Have ${total} ${escHtml(r.unit)}${ordered?' · Ordered':''}</p></div>
+        <div style="display:flex;align-items:center;gap:4px;"><input id="rv-qty-${i}" type="number" min="0" step="any" value="${escHtml(r.qty)}" placeholder="0" style="width:76px;text-align:center;border:1px solid var(--border);border-radius:10px;padding:8px 4px;background:var(--surface);" aria-label="${escHtml(r.name)} received" /><span style="font-size:12px;color:var(--text-muted);">${escHtml(r.unit)}</span></div>
+      </div>
+      ${storeHtml}
+    </div>`;
+  }).join('');
+  const listed = new Set(d.rows.map(r=>r.name.trim().toLowerCase()+'|'+r.unit));
+  const extraGroups = {};
+  DB.items.forEach(i=>{ const k = recvGroupKey(i); if(!listed.has(k) && !extraGroups[k]) extraGroups[k] = i; });
+  const extraOpts = Object.keys(extraGroups).sort((a,b)=>extraGroups[a].name.localeCompare(extraGroups[b].name))
+    .map(k=>`<option value="${escHtml(k)}">${escHtml(extraGroups[k].name)} (${escHtml(extraGroups[k].unit)})</option>`).join('');
+  const noSupplierHint = names.length ? '' : `<p style="font-size:11px;color:var(--text-muted);margin:6px 0 0;">No suppliers set on items yet. Choose "Other / not listed" and add items below.</p>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="ui.recvDraft=null;backToMain()">‹</button><p class="greet" style="font-size:16px;">Receive delivery</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div class="field"><label>Supplier</label><select onchange="onRecvSupplier(this.value)">${supplierOpts}</select>${noSupplierHint}</div>
+    ${(d.supplier) ? `
+      <div class="card" style="padding:4px 16px 10px;">
+        <p style="font-size:12px;font-weight:600;color:var(--text-muted);margin:10px 0 0;">HOW MUCH ARRIVED</p>
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 4px;">Enter the actual units you count (for example bricks), not cases or the order amount. Leave blank anything that didn't arrive.</p>
+        ${rowsHtml || '<div class="empty-note">No items are tagged with this supplier yet. Add items below.</div>'}
+        <div style="margin-top:10px;"><select onchange="onRecvAdd(this.value)" aria-label="Add another item" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);"><option value="">Add another item...</option>${extraOpts}</select></div>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Delivery receipt no. (optional)</label><input id="rv-receipt" value="${escHtml(d.receipt)}" placeholder="e.g. DR 4821" /></div>
+      <div class="field"><label>Amount paid, in pesos (optional)</label><input id="rv-paid" type="number" min="0" step="any" value="${escHtml(d.paid)}" placeholder="0.00" /></div>
+      <div class="field"><label>Expense type</label><select id="rv-exptype" style="${SEL_STYLE}">${expenseTypeOptions(d.expenseType||'Supplies')}</select></div>
+      <div class="field"><label>Paid from</label><select id="rv-paidfrom" style="${SEL_STYLE}"><option value="drawer" ${d.paidFrom!=='other'?'selected':''}>Cash drawer</option><option value="other" ${d.paidFrom==='other'?'selected':''}>Other (not the cash drawer)</option></select></div>
+      <p style="font-size:11px;color:var(--text-muted);margin:-6px 0 12px;">If an amount is entered, it is added to today's Daily Expenses.</p>
+      <button class="btn" onclick="saveDelivery()">Save delivery</button>` : ''}
+    ${renderTodayDeliveriesBlock()}
+  </div>`;
+}
+function saveDelivery(){
+  syncRecvDraft();
+  const d = ui.recvDraft;
+  if(!d) return;
+  const u = currentUser();
+  const picked = [];
+  for(const r of d.rows){
+    const raw = String(r.qty||'').trim();
+    if(raw==='') continue;
+    const q = parseFloat(raw);
+    if(isNaN(q) || q<0){ showToast('Check the amount for ' + r.name); return; }
+    if(q===0) continue;
+    const item = DB.items.find(x=>x.id===r.storeId);
+    if(!item){ showToast(r.name + ' is no longer in inventory'); return; }
+    picked.push({item, q:Math.round(q*100)/100});
+  }
+  if(!picked.length){ showToast('Enter how much arrived for at least one item'); return; }
+  const paidRaw = String(d.paid||'').trim();
+  let paid = null;
+  if(paidRaw!==''){
+    paid = parseFloat(paidRaw);
+    if(isNaN(paid) || paid<0){ showToast('Check the amount paid'); return; }
+    paid = Math.round(paid*100)/100;
+  }
+  const lines = picked.map(({item,q})=>{
+    const before = item.qty;
+    item.qty = Math.round((item.qty + q)*100)/100;
+    return {itemId:item.id, name:item.name, unit:item.unit, qty:q, before, after:item.qty, where:itemPlaceLabel(item)};
+  });
+  const supplierLabel = (!d.supplier || d.supplier==='__other__') ? 'Other supplier' : d.supplier;
+  const delivery = {id:uid('dl'), ts:Date.now(), date:dateStr(new Date()), supplier:supplierLabel, receipt:String(d.receipt||'').trim().slice(0,40), by:u.name, paid, lines, expenseType:d.expenseType||'Supplies', paidFrom:d.paidFrom==='other'?'other':'drawer', expenseLinked:false};
+  DB.deliveries.unshift(delivery);
+  const exRes = syncDeliveryExpense(delivery);
+  persist(['items','deliveries']);
+  ui.deliveryNote = exRes==='ok' ? 'Added to today\'s Daily Expenses.' : exRes==='locked' ? 'Today\'s sales report is already submitted, so the expense was not added. Ask the owner to unlock it, then a manager can re-save this delivery.' : '';
+  logActivity(`received a delivery from ${supplierLabel} (${lines.length} item${lines.length===1?'':'s'})`);
+  ui.deliveryDone = delivery.id;
+  ui.recvDraft = null;
+  ui.screen = 'delivery-saved';
+  render();
+}
+function renderDeliverySaved(){
+  const d = DB.deliveries.find(x=>x.id===ui.deliveryDone);
+  const rows = d ? d.lines.map(l=>`<div class="team-row"><div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(l.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${escHtml(l.where)}</p></div><p style="font-size:13px;font-weight:600;margin:0;white-space:nowrap;">${l.before} → ${l.after} ${escHtml(l.unit)}</p></div>`).join('') : '';
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Delivery saved</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    ${d ? `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${escHtml(d.supplier)}${d.receipt?' · '+escHtml(d.receipt):''}</p>
+    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${ui.deliveryNote?`<p style="font-size:12px;text-align:center;margin-top:10px;font-weight:600;">${escHtml(ui.deliveryNote)}</p>`:''}
+    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Counts are updated. If an amount is wrong, ask a manager or the owner to correct it.</p>` : '<div class="empty-note">This delivery is no longer available.</div>'}
+    <button class="btn" style="margin-top:14px;" onclick="backToMain()">Done</button>
+  </div>`;
+}
+
+function openDeliveriesScreen(){
+  if(!isMgr(currentUser())) return;
+  ui.screen = 'deliveries';
+  render();
+}
+function renderDeliveries(){
+  const u = currentUser();
+  const mgr = isMgr(u);
+  const todayStr = dateStr(new Date());
+  const list = DB.deliveries.filter(d=>mgr || d.date===todayStr).sort((a,b)=>b.ts-a.ts);
+  const month = dateStr(new Date()).slice(0,7);
+  const monthPaid = list.filter(d=>d.date.slice(0,7)===month && d.paid!=null).reduce((s,d)=>s+d.paid,0);
+  const autoTrimOn = DB.settings.autoTrimDeliveries !== false;
+  const ownerTools = isOwner(u) ? `
+    <div style="margin-bottom:12px;"><button class="btn btn-secondary" style="width:auto;padding:6px 10px;font-size:11px;" onclick="openDeliveriesDownloadModal()">⬇ Download report</button></div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete after 30 days</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Removes the delivery log only. Your counts are not changed. Download first if you want to keep it.</p></div>
+      <button class="btn ${autoTrimOn?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimDeliveries()">${autoTrimOn?'On':'Off'}</button>
+    </div>` : '';
+  const rows = list.length ? list.map(d=>{
+    const when = new Date(d.ts).toLocaleString([], {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+    const lines = d.lines.map(l=>`<p style="font-size:12px;margin:2px 0 0;">${escHtml(l.name)} +${l.qty} ${escHtml(l.unit)} <span style="color:var(--text-muted);">· ${escHtml(l.where)}</span></p>`).join('');
+    return `<div class="card" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(d.supplier)}${d.receipt?' · '+escHtml(d.receipt):''}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 6px;">${when} · received by ${escHtml(d.by)}${d.editedBy?` · edited by ${escHtml(d.editedBy)}`:''}</p></div>
+        ${d.paid!=null && mgr ? `<div style="text-align:right;"><p style="font-size:13px;font-weight:600;margin:0;white-space:nowrap;">${peso(d.paid)}</p><p style="font-size:10px;color:var(--text-muted);margin:2px 0 0;">${escHtml(d.expenseType||'Supplies')} · ${d.paidFrom==='other'?'Other':'Drawer'}</p>${d.paid>0&&!d.expenseLinked?`<p style="font-size:10px;color:var(--urgent);margin:2px 0 0;">Not in Daily Expenses</p>`:''}</div>` : ''}
+      </div>
+      ${lines}
+      ${mgr?`<button class="link-btn" style="margin-top:8px;font-size:12px;" onclick="openDeliveryEdit('${d.id}')">Edit amounts</button>`:''}
+    </div>`;
+  }).join('') : `<div class="empty-note">${mgr?'No deliveries logged yet.':'No deliveries logged today.'}</div>`;
+  return `
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">${mgr?'Deliveries':'Today\'s deliveries'}</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    ${ownerTools}
+    ${mgr ? `<div class="card" style="background:var(--accent-light);margin-bottom:14px;"><p style="margin:0 0 4px;font-size:12px;color:var(--accent);font-weight:600;">PAID FOR DELIVERIES THIS MONTH</p><p style="margin:0;font-size:22px;font-weight:700;color:var(--accent);">${peso(monthPaid)}</p></div>` : ''}
+    ${rows}
+  </div>`;
+}
+function openDeliveryEdit(id){
+  if(!isMgr(currentUser())) return;
+  ui.modal = {type:'delivery-edit', id};
+  render();
+}
+function renderDeliveryEditModal(){
+  const d = DB.deliveries.find(x=>x.id===ui.modal.id);
+  if(!d) return '';
+  const lines = d.lines.map((l,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+    <div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(l.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${escHtml(l.where)}</p></div>
+    <div style="display:flex;align-items:center;gap:4px;"><input id="de-qty-${i}" type="number" min="0" step="any" value="${l.qty}" style="width:76px;text-align:center;border:1px solid var(--border);border-radius:10px;padding:8px 4px;background:var(--surface);" aria-label="${escHtml(l.name)} amount received" /><span style="font-size:12px;color:var(--text-muted);">${escHtml(l.unit)}</span></div>
+  </div>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Edit delivery</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">${escHtml(d.supplier)}. Changing an amount also corrects the inventory count.</p>
+      ${lines}
+      <div class="field"><label>Delivery receipt no.</label><input id="de-receipt" value="${escHtml(d.receipt||'')}" /></div>
+      <div class="field"><label>Amount paid, in pesos</label><input id="de-paid" type="number" min="0" step="any" value="${d.paid!=null?d.paid:''}" /></div>
+      <div class="field"><label>Expense type</label><select id="de-exptype" style="${SEL_STYLE}">${expenseTypeOptions(d.expenseType||'Supplies')}</select></div>
+      <div class="field"><label>Paid from</label><select id="de-paidfrom" style="${SEL_STYLE}"><option value="drawer" ${d.paidFrom!=='other'?'selected':''}>Cash drawer</option><option value="other" ${d.paidFrom==='other'?'selected':''}>Other (not the cash drawer)</option></select></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveDeliveryEdit()">Save</button>
+      </div>
+      <button type="button" class="link-btn" style="display:block;margin:14px auto 0;color:var(--urgent);" onclick="removeDelivery('${d.id}')">Remove this delivery</button>
+    </div>
+  </div>`;
+}
+function saveDeliveryEdit(){
+  const u = currentUser();
+  if(!isMgr(u)) return;
+  const d = DB.deliveries.find(x=>x.id===ui.modal.id);
+  if(!d) return;
+  const g = id => document.getElementById(id);
+  const newQtys = [];
+  for(let i=0;i<d.lines.length;i++){
+    const q = parseFloat(g('de-qty-'+i).value);
+    if(isNaN(q) || q<0){ showToast('Check the amount for ' + d.lines[i].name); return; }
+    newQtys.push(Math.round(q*100)/100);
+  }
+  const paidRaw = g('de-paid').value.trim();
+  let paid = null;
+  if(paidRaw!==''){
+    paid = parseFloat(paidRaw);
+    if(isNaN(paid) || paid<0){ showToast('Check the amount paid'); return; }
+    paid = Math.round(paid*100)/100;
+  }
+  d.lines.forEach((l,i)=>{
+    const diff = Math.round((newQtys[i] - l.qty)*100)/100;
+    if(diff!==0){
+      const item = DB.items.find(x=>x.id===l.itemId);
+      if(item) item.qty = Math.max(0, Math.round((item.qty + diff)*100)/100);
+      l.qty = newQtys[i];
+      l.after = Math.round((l.before + newQtys[i])*100)/100;
+    }
+  });
+  d.receipt = g('de-receipt').value.trim().slice(0,40);
+  d.paid = paid;
+  d.expenseType = g('de-exptype').value;
+  d.paidFrom = g('de-paidfrom').value==='other' ? 'other' : 'drawer';
+  d.editedBy = u.name;
+  d.editedAt = Date.now();
+  const exRes = syncDeliveryExpense(d);
+  persist(['items','deliveries']);
+  if(exRes==='locked') showToast('Saved, but that day\'s report is submitted. Ask the owner to unlock it.');
+  logActivity(`corrected a delivery from ${d.supplier}`);
+  if(exRes!=='locked') showToast('Delivery updated');
+  closeModal();
+}
+function removeDelivery(id){
+  if(!isMgr(currentUser())) return;
+  const d = DB.deliveries.find(x=>x.id===id);
+  if(!d) return;
+  openConfirmModal(`Remove this delivery from ${d.supplier}? The amounts will be taken back out of your inventory counts.`, ()=>{
+    d.lines.forEach(l=>{
+      const item = DB.items.find(x=>x.id===l.itemId);
+      if(item) item.qty = Math.max(0, Math.round((item.qty - l.qty)*100)/100);
+    });
+    DB.deliveries = DB.deliveries.filter(x=>x.id!==id);
+    const rr = findSalesReport(d.date);
+    if(rr && !rr.reportLocked){ rr.expenses = rr.expenses.filter(e=>e.deliveryId!==id); persist(['salesReports']); }
+    persist(['items','deliveries']);
+    logActivity(`removed a delivery from ${d.supplier}`);
+    showToast('Delivery removed');
+  });
+}
+function openDeliveriesDownloadModal(){
+  if(!isOwner(currentUser())) return;
+  const today = dateStr(new Date());
+  ui.modal = {type:'deliveries-download-form', from:addDays(today,-29), to:today};
+  render();
+}
+function renderDeliveriesDownloadModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Download deliveries</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">Choose the date range to include.</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>From</label><input id="dl-from" type="date" value="${ui.modal.from}" /></div>
+        <div class="field" style="flex:1;"><label>To</label><input id="dl-to" type="date" value="${ui.modal.to}" /></div>
+      </div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="downloadDeliveriesCSV()">Download</button>
+      </div>
+    </div>
+  </div>`;
+}
+function downloadDeliveriesCSV(){
+  if(!isOwner(currentUser())) return;
+  const from = document.getElementById('dl-from').value;
+  const to = document.getElementById('dl-to').value;
+  if(!from || !to){ showToast('Pick both dates'); return; }
+  if(from > to){ showToast('"From" date must be before "To" date'); return; }
+  const list = DB.deliveries.filter(d=>d.date>=from && d.date<=to).sort((a,b)=>a.ts-b.ts);
+  if(!list.length){ showToast('No deliveries in that date range'); return; }
+  const rows = [];
+  let totalPaid = 0;
+  list.forEach(d=>{
+    const time = new Date(d.ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    if(d.paid!=null) totalPaid += d.paid;
+    d.lines.forEach((l,i)=>{
+      rows.push([d.date, time, d.supplier, d.receipt||'', l.name, l.qty, l.unit, l.where, d.by, (i===0 && d.paid!=null) ? d.paid : '', (i===0 && d.paid!=null) ? (d.expenseType||'Supplies') : '', (i===0 && d.paid!=null) ? (d.paidFrom==='other'?'Other':'Cash drawer') : '']);
+    });
+  });
+  rows.push(['TOTAL PAID','','','','','','','','', Math.round(totalPaid*100)/100,'','']);
+  downloadCSV(`deliveries-${from}_to_${to}.csv`, ['Date','Time','Supplier','Receipt no.','Item','Quantity','Unit','Stored in','Received by','Amount paid (per delivery)','Expense type','Paid from'], rows);
+  closeModal();
 }
 
 init();

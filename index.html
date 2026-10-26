@@ -213,7 +213,7 @@ function saveLocal(key, val){
 }
 
 /* ---------- app state ---------- */
-let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[] };
+let DB = { users:[], locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[], pay:payInit(null), menu:[] };
 let session = { userId:null };
 let ui = { screen:'loading', tab:'home', authMode:'login', authRole:'staff',
   stockCat:'all', stockSub:'all', stockSearch:'', modal:null, pendingAttendType:null,
@@ -259,12 +259,15 @@ async function init(){
   DB.shoppingMarks = await loadShared('inv_shoppingmarks', []);
   DB.freshProduceChecks = await loadShared('inv_freshproducechecks', []);
   DB.deliveries = await loadShared('inv_deliveries', []);
+  DB.pay = payInit(await loadShared('inv_pay', null));
+  DB.menu = await loadShared('inv_menu', []);
   trimOldAttendance();
   trimOldAttendancePhotos();
   trimOldNotes();
   trimOldSalesReports();
   trimOldChecklistRuns();
   trimOldDeliveries();
+  trimOldPay();
   session = await loadLocal('inv_session', {userId:null});
   ui.screen = (session.userId && currentUser()) ? 'main' : 'auth';
   render();
@@ -293,6 +296,8 @@ function persist(keys){
   if(keys.includes('shoppingMarks')) saveShared('inv_shoppingmarks', DB.shoppingMarks);
   if(keys.includes('freshProduceChecks')) saveShared('inv_freshproducechecks', DB.freshProduceChecks);
   if(keys.includes('deliveries')) saveShared('inv_deliveries', DB.deliveries);
+  if(keys.includes('pay')) saveShared('inv_pay', DB.pay);
+  if(keys.includes('menu')) saveShared('inv_menu', DB.menu);
 }
 
 function logActivity(text){
@@ -460,6 +465,15 @@ async function seedDemoData(){
   persist(['users','items','recipes']);
 }
 
+function payInit(p){
+  p = p || {};
+  return {
+    cfg: Object.assign({nightStart:'22:00', nightEnd:'06:00', regPct:200, specPct:130, paidHours:8, breakMins:60}, p.cfg||{}),
+    rates: p.rates || {},
+    holidays: p.holidays || [],
+    approvals: p.approvals || []
+  };
+}
 /* ---------- attendance ---------- */
 function lastAttendanceFor(userId){
   const rows = DB.attendance.filter(a=>a.userId===userId);
@@ -481,10 +495,18 @@ const DAY_LABELS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function dateStr(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function mondayOf(d){ const c=new Date(d); const day=(c.getDay()+6)%7; c.setDate(c.getDate()-day); return c; }
 function addDays(ds, n){ const d=new Date(ds+'T00:00:00'); d.setDate(d.getDate()+n); return dateStr(d); }
-function shiftForUserOnDate(userId, ds){
+function shiftsForUserOnDate(userId, ds){
   const entry = DB.schedule.find(s=>s.userId===userId && s.date===ds);
-  if(!entry) return null;
-  return DB.shifts.find(sh=>sh.id===entry.shiftId) || null;
+  if(!entry) return [];
+  if(entry.custom && entry.custom.length){
+    return entry.custom.map((c,i)=>({id:'custom'+i, name:'Custom', timeIn:c.timeIn, timeOut:c.timeOut, custom:true, color:entry.color||''}));
+  }
+  const sh = DB.shifts.find(x=>x.id===entry.shiftId);
+  return sh ? [sh] : [];
+}
+function shiftsLabel(list){ return list.map(sh=>formatTimeShort(sh.timeIn)+' to '+formatTimeShort(sh.timeOut)).join(' and '); }
+function shiftForUserOnDate(userId, ds){
+  return shiftsForUserOnDate(userId, ds)[0] || null;
 }
 function expectedTimeInFor(userId, ts){
   const shift = shiftForUserOnDate(userId, dateStr(new Date(ts)));
@@ -749,6 +771,14 @@ function handleAttendancePhoto(e){
     persist(['attendance']);
     logActivity(ui.pendingAttendType==='in' ? 'timed in for work' : 'timed out for the day');
     showToast(ui.pendingAttendType==='in' ? 'Timed in — have a good shift!' : 'Timed out — see you next time!');
+    if(ui.pendingAttendType==='out'){
+      const shList = shiftsForUserOnDate(u.id, dateStr(new Date(ts)));
+      const sh = shList[0];
+      if(sh){
+        const outLabel = new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+        ui.modal = {type:'clockout-note', text:`Your scheduled shift today is ${shiftsLabel(shList)}. You clocked out at ${outLabel}. Any extra time past your shift will be reviewed by the owner.`};
+      }
+    }
     render();
   });
 }
@@ -1260,20 +1290,21 @@ function downloadAttendanceCSV(){
 function openAttendancePolicyScreen(){ ui.screen='attendance-policy'; render(); }
 function openShiftFormModal(shiftId){
   const shift = shiftId ? DB.shifts.find(s=>s.id===shiftId) : null;
-  ui.modal = {type:'shift-form', shiftId, draft: shift ? {name:shift.name, timeIn:shift.timeIn, timeOut:shift.timeOut} : {name:'', timeIn:'08:00', timeOut:'16:00'}};
+  ui.modal = {type:'shift-form', shiftId, draft: shift ? {name:shift.name, timeIn:shift.timeIn, timeOut:shift.timeOut, color:shift.color||''} : {name:'', timeIn:'08:00', timeOut:'16:00', color:''}};
   render();
 }
 function saveShift(){
   const name = document.getElementById('sh-name').value.trim();
   const timeIn = document.getElementById('sh-in').value.trim();
   const timeOut = document.getElementById('sh-out').value.trim();
+  const color = document.getElementById('sh-color').value;
   if(!name){ showToast('Name this shift'); return; }
   if(!isTimeFormat(timeIn) || !isTimeFormat(timeOut)){ showToast('Use 24-hour format, e.g. 08:00'); return; }
   if(ui.modal.shiftId){
     const shift = DB.shifts.find(s=>s.id===ui.modal.shiftId);
-    Object.assign(shift, {name, timeIn:normTime(timeIn), timeOut:normTime(timeOut)});
+    Object.assign(shift, {name, timeIn:normTime(timeIn), timeOut:normTime(timeOut), color});
   } else {
-    DB.shifts.push({id:uid('shift'), name, timeIn:normTime(timeIn), timeOut:normTime(timeOut)});
+    DB.shifts.push({id:uid('shift'), name, timeIn:normTime(timeIn), timeOut:normTime(timeOut), color});
   }
   persist(['shifts']);
   closeModal();
@@ -1294,7 +1325,57 @@ function shiftScheduleWeek(delta){
   ui.scheduleWeekStart = addDays(ui.scheduleWeekStart, delta*7);
   render();
 }
+function openCustomShift(userId, ds){
+  if(!canManageSchedule(currentUser())) return;
+  ui.modal = {type:'custom-shift', userId, ds};
+  render();
+}
+function renderCustomShiftModal(){
+  const entry = DB.schedule.find(x=>x.userId===ui.modal.userId && x.date===ui.modal.ds);
+  const c = (entry && entry.custom) || [];
+  const label = new Date(ui.modal.ds+'T00:00:00').toLocaleDateString([], {weekday:'long', month:'long', day:'numeric'});
+  const tin = (id,v)=>`<input id="${id}" type="time" value="${v||''}" />`;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Custom shift</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">${label}. For a split duty, fill in both parts. A part can run past midnight.</p>
+      <p style="font-size:12px;font-weight:600;margin:0 0 6px;">Part 1</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>Time in</label>${tin('cs-in1', c[0]&&c[0].timeIn)}</div>
+        <div class="field" style="flex:1;"><label>Time out</label>${tin('cs-out1', c[0]&&c[0].timeOut)}</div>
+      </div>
+      <p style="font-size:12px;font-weight:600;margin:4px 0 6px;">Part 2 (optional, for split duty)</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>Time in</label>${tin('cs-in2', c[1]&&c[1].timeIn)}</div>
+        <div class="field" style="flex:1;"><label>Time out</label>${tin('cs-out2', c[1]&&c[1].timeOut)}</div>
+      </div>
+      <div class="field"><label>Color on the schedule</label>${swatchPickerHtml('cs-color', entry && entry.color)}</div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveCustomShift()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveCustomShift(){
+  if(!canManageSchedule(currentUser())) return;
+  const g = id => document.getElementById(id).value;
+  const in1=g('cs-in1'), out1=g('cs-out1'), in2=g('cs-in2'), out2=g('cs-out2');
+  if(!in1 || !out1){ showToast('Enter the time in and time out for part 1'); return; }
+  const parts = [{timeIn:in1, timeOut:out1}];
+  if(in2 || out2){
+    if(!in2 || !out2){ showToast('Enter both times for part 2, or leave it empty'); return; }
+    parts.push({timeIn:in2, timeOut:out2});
+  }
+  const {userId, ds} = ui.modal;
+  DB.schedule = DB.schedule.filter(x=>!(x.userId===userId && x.date===ds));
+  DB.schedule.push({id:uid('sch'), userId, date:ds, custom:parts, color:g('cs-color')});
+  persist(['schedule']);
+  closeModal();
+}
 function setScheduleForDate(userId, ds, shiftId){
+  if(shiftId==='__keep__'){ openCustomShift(userId, ds); render(); return; }
+  if(shiftId==='__custom__'){ openCustomShift(userId, ds); render(); return; }
   DB.schedule = DB.schedule.filter(s=>!(s.userId===userId && s.date===ds));
   if(shiftId){ DB.schedule.push({id:uid('sch'), userId, date:ds, shiftId}); }
   persist(['schedule']);
@@ -1637,6 +1718,14 @@ function removeUser(userId){
 }
 
 /* ---------- rendering ---------- */
+const RECIPES_TAB_ENABLED = false;
+function recipesHiddenFor(u){ return !RECIPES_TAB_ENABLED || !!(DB.settings.hideRecipes && u && !isOwner(u)); }
+function toggleHideRecipes(){
+  if(!isOwner(currentUser())) return;
+  DB.settings.hideRecipes = !DB.settings.hideRecipes;
+  persist(['settings']);
+  render();
+}
 function setTab(tab){ ui.tab = tab; ui.screen='main'; render(); }
 function openActivityScreen(){ ui.screen='activity'; render(); }
 function openWastageLogScreen(){ ui.screen='wastage-log'; render(); }
@@ -1690,7 +1779,7 @@ function render(){
   if(ui.screen==='attendance-policy'){ body = renderAttendancePolicy(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='shifts-manage'){ body = renderShiftsManage(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='events-manage'){ body = renderEventsManage(); app.innerHTML = body + renderModal(); return; }
-  if(ui.screen==='schedule-edit'){ body = renderScheduleEdit(); app.innerHTML = body; return; }
+  if(ui.screen==='schedule-edit'){ body = renderScheduleEdit(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='my-schedule'){ body = renderMySchedule(); app.innerHTML = body; return; }
   if(ui.screen==='team-schedule'){ body = renderTeamSchedule(); app.innerHTML = body; return; }
   if(ui.screen==='security-log'){ body = renderSecurityLog(); app.innerHTML = body; return; }
@@ -1709,11 +1798,13 @@ function render(){
   if(ui.screen==='sales-cashdrawer'){ body = renderSalesCashDrawer(); app.innerHTML = body; return; }
   if(ui.screen==='sales-online'){ body = renderSalesOnline(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='morning-cash-count'){ body = renderMorningCashCount(); app.innerHTML = body + renderModal(); return; }
-  if(ui.screen==='payroll-hours'){ body = renderPayrollHours(); app.innerHTML = body; return; }
+  if(ui.screen==='payroll-hours'){ body = renderPayrollHours(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='sales-trends'){ body = renderSalesTrends(); app.innerHTML = body; return; }
   if(ui.screen==='wastage-trends'){ body = renderWastageTrends(); app.innerHTML = body; return; }
+  if(ui.tab==='recipes' && (recipesHiddenFor(currentUser()) || !RECIPES_TAB_ENABLED)) ui.tab = 'home';
   if(ui.tab==='home') body = renderHome();
   else if(ui.tab==='stock') body = renderStock();
+  else if(ui.tab==='menu') body = renderMenu();
   else if(ui.tab==='recipes') body = renderRecipes();
   else if(ui.tab==='team') body = renderTeam();
   else if(ui.tab==='profile') body = renderProfile();
@@ -1927,13 +2018,13 @@ function renderHome(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
-  const eightySixed = DB.recipes.filter(r=>r.eightySixed);
+  const eightySixed = DB.menu.filter(r=>r.outOfStock);
   const eightySixCard = eightySixed.length ? `
     <div class="card" style="background:var(--urgent-bg);border-color:var(--urgent);margin-bottom:14px;">
       <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:var(--urgent);">🚫 OUT OF STOCK — SOLD OUT TODAY</p>
       ${eightySixed.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,0,0,0.06);">
         <span style="font-size:13px;font-weight:600;">${r.name}</span>
-        <button class="link-btn" style="font-size:12px;" onclick="toggle86('${r.id}')">Mark available</button>
+        <button class="link-btn" style="font-size:12px;" onclick="toggleMenuOut('${r.id}')">Mark available</button>
       </div>`).join('')}
     </div>` : '';
 
@@ -2131,26 +2222,133 @@ function renderRecipes(){
   if(search) filtered = filtered.filter(r=>r.name.toLowerCase().includes(search));
   const rows = filtered.length ? filtered.map(r=>{
     const preview = (r.ingredients||[]).slice(0,3).join(', ') + ((r.ingredients||[]).length>3 ? ', …' : '');
-    const eightySixBtn = r.eightySixed
-      ? `<button class="link-btn" style="color:var(--urgent);font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">🚫 Out of Stock — tap to restore</button>`
-      : `<button class="link-btn" style="font-size:12px;" onclick="event.stopPropagation();toggle86('${r.id}')">Mark Out of Stock</button>`;
-    return `<div class="card recipe-card" style="${r.eightySixed?'opacity:0.7;':''}" onclick="${isMgr(u)?`openRecipeModal('${r.id}')`:`openRecipeViewModal('${r.id}')`}">
+    return `<div class="card recipe-card" onclick="${isMgr(u)?`openRecipeModal('${r.id}')`:`openRecipeViewModal('${r.id}')`}">
       <div style="display:flex;align-items:flex-start;">
         <div style="flex:1;min-width:0;">
           <div class="recipe-top"><p class="recipe-name">${r.name}</p><span class="badge badge-neutral">${r.category||'Food'}</span></div>
           <p class="ing-list">${preview}</p>
-          ${eightySixBtn}
         </div>
       </div>
     </div>`;
   }).join('') : `<div class="empty-note">No recipes match here yet.</div>`;
+  const recipeToggleCard = isOwner(u) ? `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Show recipes to staff and managers</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Turn off to hide the Recipes tab. Only you will see it.</p></div>
+      <button class="btn ${DB.settings.hideRecipes?'btn-secondary':''}" style="width:auto;padding:8px 14px;" onclick="toggleHideRecipes()">${DB.settings.hideRecipes?'Off':'On'}</button>
+    </div>` : '';
   return `
   <header class="topbar"><div><p class="greet">Recipes</p><p class="greet-sub" style="font-size:10px;line-height:1.4;">All recipes, techniques, and formulas contained herein are the sole intellectual property of WILD. Recreating these proprietary methods for external commercial and personal use, or disclosing them to third parties, will result in disciplinary action up to termination, and civil litigation for intellectual property theft.</p></div></header>
   <div class="screen" style="padding-top:0;">
+    ${recipeToggleCard}
     ${isMgr(u) ? `<div class="fab-row"><button class="btn" onclick="openRecipeModal(null)">+ Add recipe</button></div>
     <div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="document.getElementById('hidden-recipe-csv-input').click()">Import CSV</button><button class="btn btn-secondary" onclick="downloadRecipeTemplate()">Download template</button></div>` : ''}
     <div class="search-wrap"><input id="recipe-search-input" placeholder="Search recipes..." value="${ui.recipeSearch}" oninput="onRecipeSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
+    ${rows}
+  </div>`;
+}
+
+function toggleMenuOut(id){
+  const m = DB.menu.find(x=>x.id===id);
+  if(!m) return;
+  m.outOfStock = !m.outOfStock;
+  persist(['menu']);
+  logActivity(`${m.outOfStock ? 'marked' : 'un-marked'} "${m.name}" as ${m.outOfStock ? 'out of stock' : 'available again'}`);
+  render();
+}
+function onMenuSearch(el){ ui.menuSearch = el.value; const pos = el.selectionStart; render(); const n = document.getElementById('menu-search-input'); if(n){ n.focus(); try{ n.setSelectionRange(pos,pos); }catch(e){} } }
+function setMenuCat(c){ ui.menuCat = c; render(); }
+function openMenuItemModal(id){
+  if(!isMgr(currentUser())) return;
+  const m = id ? DB.menu.find(x=>x.id===id) : null;
+  ui.modal = {type:'menu-item', id, category: m ? (m.category||'Food') : (ui.menuCat && ui.menuCat!=='all' ? ui.menuCat : 'Food')};
+  render();
+}
+function setMenuModalCat(c){
+  const el = document.getElementById('mn-name');
+  ui.modal.draftName = el ? el.value : ui.modal.draftName;
+  ui.modal.category = c; render();
+}
+function renderMenuItemModal(){
+  const m = ui.modal.id ? DB.menu.find(x=>x.id===ui.modal.id) : null;
+  const nm = ui.modal.draftName!=null ? ui.modal.draftName : (m ? m.name : '');
+  const chips = RECIPE_CATEGORIES.map(c=>`<div class="chip ${ui.modal.category===c?'active':''}" onclick="setMenuModalCat('${c}')">${c}</div>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">${m?'Edit menu item':'Add menu item'}</p>
+      <div class="field"><label>Name</label><input id="mn-name" value="${escHtml(nm)}" placeholder="e.g. Iced latte" /></div>
+      <div class="field"><label>Category</label><div class="chip-row" style="margin:0;">${chips}</div></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveMenuItem()">Save</button>
+      </div>
+      ${m ? `<button type="button" class="link-btn" style="display:block;margin:14px auto 0;color:var(--urgent);" onclick="deleteMenuItem('${m.id}')">Remove from menu</button>` : ''}
+    </div>
+  </div>`;
+}
+function saveMenuItem(){
+  if(!isMgr(currentUser())) return;
+  const name = document.getElementById('mn-name').value.trim();
+  if(!name){ showToast('Enter a name'); return; }
+  const category = ui.modal.category || 'Food';
+  if(ui.modal.id){
+    const m = DB.menu.find(x=>x.id===ui.modal.id);
+    if(m){ m.name = name; m.category = category; }
+  } else {
+    if(DB.menu.some(x=>x.name.trim().toLowerCase()===name.toLowerCase() && (x.category||'Food')===category)){ showToast('That item is already on the menu'); return; }
+    DB.menu.push({id:uid('mn'), name, category, outOfStock:false});
+  }
+  persist(['menu']);
+  logActivity(`${ui.modal.id?'updated':'added'} menu item ${name}`);
+  closeModal();
+}
+function deleteMenuItem(id){
+  if(!isMgr(currentUser())) return;
+  const m = DB.menu.find(x=>x.id===id);
+  DB.menu = DB.menu.filter(x=>x.id!==id);
+  persist(['menu']);
+  logActivity(`removed menu item ${m?m.name:''}`);
+  closeModal();
+}
+function addMenuFromRecipes(){
+  if(!isMgr(currentUser())) return;
+  let added = 0;
+  DB.recipes.forEach(r=>{
+    const cat = r.category||'Food';
+    if(!DB.menu.some(x=>x.name.trim().toLowerCase()===r.name.trim().toLowerCase() && (x.category||'Food')===cat)){
+      DB.menu.push({id:uid('mn'), name:r.name, category:cat, outOfStock:!!r.eightySixed});
+      added++;
+    }
+  });
+  persist(['menu']);
+  showToast(added ? `Added ${added} item${added===1?'':'s'} from your recipes` : 'Everything from your recipes is already on the menu');
+  render();
+}
+function renderMenu(){
+  const u = currentUser();
+  const cats = ['all', ...RECIPE_CATEGORIES];
+  const chips = cats.map(c=>`<div class="chip ${(ui.menuCat||'all')===c?'active':''}" onclick="setMenuCat('${c}')">${c==='all'?'All':c}</div>`).join('');
+  const q = (ui.menuSearch||'').toLowerCase();
+  let list = DB.menu.slice();
+  if((ui.menuCat||'all')!=='all') list = list.filter(m=>(m.category||'Food')===ui.menuCat);
+  if(q) list = list.filter(m=>m.name.toLowerCase().includes(q));
+  list.sort((a,b)=>(b.outOfStock?1:0)-(a.outOfStock?1:0) || a.name.localeCompare(b.name));
+  const outCount = DB.menu.filter(m=>m.outOfStock).length;
+  const rows = list.length ? list.map(m=>`
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;${m.outOfStock?'border-color:var(--urgent);background:var(--urgent-bg);':''}">
+      <div style="flex:1;min-width:0;${isMgr(u)?'cursor:pointer;':''}" ${isMgr(u)?`onclick="openMenuItemModal('${m.id}')"`:''}>
+        <p style="font-size:14px;font-weight:600;margin:0;${m.outOfStock?'text-decoration:line-through;':''}">${escHtml(m.name)}</p>
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${m.category||'Food'}${m.outOfStock?' · <span style="color:var(--urgent);font-weight:700;">OUT OF STOCK</span>':''}</p>
+      </div>
+      <button class="btn ${m.outOfStock?'':'btn-secondary'}" style="width:auto;padding:8px 12px;font-size:12px;white-space:nowrap;" onclick="toggleMenuOut('${m.id}')">${m.outOfStock?'Mark available':'Mark out of stock'}</button>
+    </div>`).join('') : `<div class="empty-note">${DB.menu.length ? 'No menu items match.' : (isMgr(u) ? 'No menu items yet. Add one, or add them from your recipes.' : 'No menu items yet.')}</div>`;
+  return `
+  <header class="topbar"><div><p class="greet">Menu</p><p class="greet-sub">${outCount ? outCount+' item'+(outCount===1?'':'s')+' out of stock' : 'Everything is available'}</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    ${isMgr(u) ? `<div class="fab-row"><button class="btn" onclick="openMenuItemModal(null)">+ Add menu item</button></div>
+    ${DB.recipes.length ? `<div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="addMenuFromRecipes()">Add items from recipes</button></div>` : ''}` : ''}
+    <div class="search-wrap"><input id="menu-search-input" placeholder="Search menu..." value="${escHtml(ui.menuSearch||'')}" oninput="onMenuSearch(this)" /></div>
+    <div class="chip-row">${chips}</div>
     ${rows}
   </div>`;
 }
@@ -2348,7 +2546,61 @@ function renderAttendancePhotoModal(){
 
 const SHIFT_COLORS = ['#7FD1AE','#8BD46E','#7FE8D0','#8FC7F0','#F2A6A0','#C6A8F0','#F0C57F'];
 const DAY_LETTERS = ['Su','M','T','W','Th','F','Sa'];
-const DAYOFF_COLOR = '#FBE577';
+const DAYOFF_COLOR = '#B9B9B1';
+const OTHER_SHIFT_COLOR = '#D9D8D0';
+const SHIFT_PALETTE = ['#8BD46E','#C6A8F0','#F2A6A0','#8FC7F0','#F0C57F','#7FE8D0','#F4B6C2','#D9D8D0'];
+function swatchPickerHtml(inputId, current){
+  const btn = (c,label)=>`<button type="button" data-sw="${inputId}" data-c="${c}" onclick="pickSwatch('${inputId}','${c}')" aria-label="${label}" style="width:34px;height:34px;border-radius:8px;border:${(current||'')===c?'3px solid var(--text)':'1px solid var(--border)'};background:${c||'transparent'};font-size:10px;color:var(--text-muted);padding:0;cursor:pointer;">${c?'':'Auto'}</button>`;
+  return `<div id="${inputId}-wrap" style="display:flex;flex-wrap:wrap;gap:8px;">${btn('','Automatic color')}${SHIFT_PALETTE.map(c=>btn(c,'Color '+c)).join('')}</div><input type="hidden" id="${inputId}" value="${current||''}" />`;
+}
+function pickSwatch(inputId, c){
+  document.getElementById(inputId).value = c;
+  document.querySelectorAll('[data-sw="'+inputId+'"]').forEach(b=>{ b.style.border = b.dataset.c===c ? '3px solid var(--text)' : '1px solid var(--border)'; });
+}
+function colorOfParts(parts){
+  const sh = parts[0];
+  if(sh.color) return sh.color;
+  const kind = shiftKindOf(parts);
+  return kind ? SHIFT_KINDS[kind].color : OTHER_SHIFT_COLOR;
+}
+function partsLabel(parts){
+  if(parts.length>1) return 'Split duty';
+  if(parts[0].custom) return 'Custom shift';
+  return parts[0].name;
+}
+const SHIFT_KINDS = {
+  opening:{label:'Opening', color:'#8BD46E'},
+  closing:{label:'Closing', color:'#C6A8F0'},
+  split:{label:'Split duty', color:'#F2A6A0'},
+  special:{label:'Special shift', color:'#8FC7F0'}
+};
+function shiftKindOf(parts){
+  if(!parts || !parts.length) return null;
+  if(parts.length>1) return 'split';
+  const sh = parts[0];
+  if(sh.custom) return 'special';
+  if(sh.type) return sh.type;
+  const n = (sh.name||'').toLowerCase();
+  if(n.includes('open')) return 'opening';
+  if(n.includes('clos')) return 'closing';
+  if(n.includes('special')) return 'special';
+  return null;
+}
+function eventsListHtml(dates){
+  const evs = DB.events.filter(e=>dates.includes(e.date)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  if(!evs.length) return '';
+  const rows = evs.map(e=>{
+    const day = new Date(e.date+'T00:00:00').toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+    const t = formatTimeShort(e.time||'00:00') + (e.endTime ? ' to ' + formatTimeShort(e.endTime) : '');
+    return `<div style="padding:8px 0;border-top:1px solid var(--border);"><p style="font-size:12px;font-weight:600;margin:0;">${escHtml(e.title)}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${day} · ${t}</p></div>`;
+  }).join('');
+  return `<div class="card" style="margin-top:12px;padding:4px 16px 6px;"><p style="font-size:12px;font-weight:600;color:var(--text-muted);margin:10px 0 2px;">EVENTS AND RESERVATIONS THIS WEEK</p>${rows}</div>`;
+}
+function scheduleLegendHtml(withEvents, legendMap){
+  const chip = (c,l)=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);margin:0 10px 4px 0;"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block;flex:none;"></span>${escHtml(l)}</span>`;
+  const used = Object.keys(legendMap||{}).map(c=>chip(c, legendMap[c].slice(0,3).join(' / ') + (legendMap[c].length>3?' ...':''))).join('');
+  return `<div style="margin-top:8px;">${used}${chip(DAYOFF_COLOR,'Day off')}${withEvents?chip('#F6C98B','Event or reservation'):''}</div>`;
+}
 function shiftColorFor(shiftId){
   let hash = 0;
   for(let i=0;i<shiftId.length;i++){ hash = (hash*31 + shiftId.charCodeAt(i)) >>> 0; }
@@ -2368,30 +2620,41 @@ function renderScheduleTable(usersToShow, weekStart){
   });
   const hasEvents = days.some(d=>DB.events.some(e=>e.date===d.ds));
   const eventsRow = hasEvents ? `<tr>
-    <td style="background:#FCE98C;font-weight:700;padding:4px 2px;font-size:8px;">EV</td>
+    <td style="background:#F6C98B;font-weight:700;padding:4px 2px;font-size:8px;">EV</td>
     ${days.map(d=>{
       const evs = DB.events.filter(e=>e.date===d.ds);
-      return `<td style="background:#FCE98C;padding:3px 1px;font-size:7px;text-align:center;line-height:1.1;word-break:break-word;">${evs.map(e=>e.title).join(', ')||''}</td>`;
+      return `<td style="background:#F6C98B;padding:3px 1px;font-size:7px;text-align:center;line-height:1.1;word-break:break-word;">${evs.map(e=>e.title).join(', ')||''}</td>`;
+    }).join('')}
+  </tr>` : '';
+  const hasHolidays = days.some(d=>holidayOn(d.ds));
+  const holidayRow = hasHolidays ? `<tr>
+    <td style="background:#F4B6C2;font-weight:700;padding:4px 2px;font-size:8px;">HOL</td>
+    ${days.map(d=>{
+      const h = holidayOn(d.ds);
+      return `<td style="background:${h?'#F4B6C2':'#fff'};padding:3px 1px;font-size:7px;text-align:center;line-height:1.1;word-break:break-word;font-weight:700;">${h?(h.type==='regular'?'REG':'SPL'):''}</td>`;
     }).join('')}
   </tr>` : '';
   const headerRow = `<tr>
     <th style="background:#C9C9C9;padding:4px 2px;font-size:9px;text-align:center;">STAFF</th>
     ${days.map(d=>`<th style="background:#C9C9C9;padding:4px 1px;font-size:9px;line-height:1.2;">${d.letter}<br>${d.num}</th>`).join('')}
   </tr>`;
+  const legendMap = {};
   const bodyRows = usersToShow.map(u=>{
     const cells = days.map(d=>{
-      const shift = shiftForUserOnDate(u.id, d.ds);
-      const bg = shift ? shiftColorFor(shift.id) : DAYOFF_COLOR;
-      const text = shift ? `${formatTimeShort(shift.timeIn)}<br>${formatTimeShort(shift.timeOut)}` : 'OFF';
+      const parts = shiftsForUserOnDate(u.id, d.ds);
+      const shift = parts[0];
+      const bg = shift ? colorOfParts(parts) : DAYOFF_COLOR;
+      if(shift){ const c = bg; if(!legendMap[c]) legendMap[c] = []; const lb = partsLabel(parts); if(!legendMap[c].includes(lb)) legendMap[c].push(lb); }
+      const text = parts.length>1 ? parts.map(sh=>`${formatTimeShort(sh.timeIn)}-${formatTimeShort(sh.timeOut)}`).join('<br>') : shift ? `${formatTimeShort(shift.timeIn)}<br>${formatTimeShort(shift.timeOut)}` : 'OFF';
       return `<td style="background:${bg};padding:4px 1px;font-size:9px;text-align:center;font-weight:700;color:#20261F;line-height:1.25;">${text}</td>`;
     }).join('');
     return `<tr><td style="background:#EEEDE6;padding:4px 2px;font-size:10px;font-weight:700;text-align:center;">${initials(u.name)}</td>${cells}</tr>`;
   }).join('');
   return `<div style="border-radius:10px;border:1px solid var(--border);overflow:hidden;">
     <table style="border-collapse:collapse;width:100%;table-layout:fixed;">
-      ${eventsRow}${headerRow}${bodyRows}
+      ${eventsRow}${holidayRow}${headerRow}${bodyRows}
     </table>
-  </div>`;
+  </div>${scheduleLegendHtml(hasEvents, legendMap)}${eventsListHtml(days.map(d=>d.ds))}`;
 }
 function openMyScheduleScreen(){ ui.screen='my-schedule'; ui.myScheduleWeekStart = dateStr(mondayOf(new Date())); render(); }
 function shiftMyScheduleWeek(delta){ ui.myScheduleWeekStart = addDays(ui.myScheduleWeekStart, delta*7); render(); }
@@ -2485,8 +2748,9 @@ function renderBottomNav(){
   const tabs = [
     {id:'home', label:'Home', ico:'⌂'},
     {id:'stock', label:'Inventory', ico:'▤'},
-    {id:'recipes', label:'Recipes', ico:'≡'},
+    {id:'menu', label:'Menu', ico:'<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v6a2 2 0 0 0 2 2v10"/><path d="M4 3v5"/><path d="M10 3v5"/><path d="M8 3v8"/><ellipse cx="17" cy="7" rx="2.6" ry="4"/><path d="M17 11v10"/></svg>'},
   ];
+  if(RECIPES_TAB_ENABLED && !recipesHiddenFor(u)) tabs.push({id:'recipes', label:'Recipes', ico:'≡'});
   if(isMgr(u)) tabs.push({id:'team', label:'Team', ico:'◎'});
   tabs.push({id:'profile', label:'Profile', ico:'●'});
   return `<nav class="bottom-nav">${tabs.map(t=>`
@@ -2496,6 +2760,13 @@ function renderBottomNav(){
 
 function renderModal(){
   if(!ui.modal) return '';
+  if(ui.modal.type==='menu-item') return renderMenuItemModal();
+  if(ui.modal.type==='custom-shift') return renderCustomShiftModal();
+  if(ui.modal.type==='pay-download') return renderPayDownloadModal();
+  if(ui.modal.type==='pay-rates') return renderPayRatesModal();
+  if(ui.modal.type==='pay-settings') return renderPaySettingsModal();
+  if(ui.modal.type==='holiday-edit') return renderHolidayEditModal();
+  if(ui.modal.type==='clockout-note') return renderClockoutNoteModal();
   if(ui.modal.type==='item-qty') return renderItemQtyModal();
   if(ui.modal.type==='item-group') return renderItemGroupModal();
   if(ui.modal.type==='item-form') return renderItemFormModal();
@@ -2563,7 +2834,7 @@ function openEventsScreen(){ ui.screen='events-manage'; render(); }
 function renderShiftsManage(){
   const shiftRows = DB.shifts.length ? DB.shifts.map(s=>`
     <div class="team-row" onclick="openShiftFormModal('${s.id}')">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">${s.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${s.timeIn} – ${s.timeOut}</p></div>
+      <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;height:14px;border-radius:4px;background:${colorOfParts([s])};flex:none;"></span><div><p style="font-size:13px;font-weight:600;margin:0;">${s.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${s.timeIn} – ${s.timeOut}</p></div></div>
       <span style="color:var(--text-muted);">›</span>
     </div>`).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:0;">No shifts defined yet.</p>`;
   const clockers = DB.users.filter(u=>!isOwner(u));
@@ -2650,8 +2921,13 @@ function renderScheduleEdit(){
     const d = new Date(ds+'T00:00:00');
     const label = d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
     const entry = DB.schedule.find(s=>s.userId===m.id && s.date===ds);
-    const opts = `<option value="">Off</option>` + DB.shifts.map(s=>`<option value="${s.id}" ${entry&&entry.shiftId===s.id?'selected':''}>${s.name} (${s.timeIn}–${s.timeOut})</option>`).join('');
-    return `<div class="team-row"><p style="font-size:12px;font-weight:600;margin:0;width:90px;">${label}</p><select class="role-select" style="flex:1;" onchange="setScheduleForDate('${m.id}', '${ds}', this.value)">${opts}</select></div>`;
+    const customLabel = entry && entry.custom ? entry.custom.map(c=>c.timeIn+'–'+c.timeOut).join(' + ') : '';
+    const opts = `<option value="">Off</option>` + (customLabel ? `<option value="__keep__" selected>Custom (${customLabel})</option>` : '') + DB.shifts.map(s=>`<option value="${s.id}" ${entry&&entry.shiftId===s.id?'selected':''}>${s.name} (${s.timeIn}–${s.timeOut})</option>`).join('') + (canManageSchedule(currentUser()) ? `<option value="__custom__">Custom or split duty...</option>` : '');
+    const hol = holidayOn(ds);
+    const dateCell = canManageSchedule(currentUser())
+      ? `<div style="width:90px;cursor:pointer;" onclick="openHolidayEdit('${ds}')"><p style="font-size:12px;font-weight:600;margin:0;">${label}</p><p style="font-size:10px;margin:1px 0 0;color:${hol?'var(--urgent)':'var(--accent)'};">${hol?(hol.type==='regular'?'Regular holiday':'Special holiday'):'Mark holiday'}</p></div>`
+      : `<div style="width:90px;"><p style="font-size:12px;font-weight:600;margin:0;">${label}</p>${hol?`<p style="font-size:10px;margin:1px 0 0;color:var(--urgent);">${hol.type==='regular'?'Regular holiday':'Special holiday'}</p>`:''}</div>`;
+    return `<div class="team-row">${dateCell}<select class="role-select" style="flex:1;" onchange="setScheduleForDate('${m.id}', '${ds}', this.value)">${opts}</select></div>`;
   }).join('');
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToScheduleManage()">‹</button><p class="greet" style="font-size:16px;">${m.name}'s schedule</p></div></header>
@@ -2677,6 +2953,7 @@ function renderShiftFormModal(){
         <div class="field" style="flex:1;"><label>Time in</label><input id="sh-in" value="${d.timeIn}" placeholder="08:00" /></div>
         <div class="field" style="flex:1;"><label>Time out</label><input id="sh-out" value="${d.timeOut}" placeholder="16:00" /></div>
       </div>
+      <div class="field"><label>Color on the schedule</label>${swatchPickerHtml('sh-color', d.color)}</div>
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn" onclick="saveShift()">Save</button>
@@ -3799,38 +4076,373 @@ function submitMorningCashCount(){
 }
 
 /* ---------- hours & payroll ---------- */
-function openPayrollHoursScreen(){ ui.screen='payroll-hours'; ui.payrollWeekStart = dateStr(mondayOf(new Date())); render(); }
+function openPayrollHoursScreen(){ if(!isOwner(currentUser())) return; ui.screen='payroll-hours'; ui.payrollWeekStart = dateStr(mondayOf(new Date())); render(); }
 function shiftPayrollWeek(delta){ ui.payrollWeekStart = addDays(ui.payrollWeekStart, delta*7); render(); }
-function computeHoursForRange(fromDs, toDs){
-  const fromTs = new Date(fromDs+'T00:00:00').getTime();
-  const toTs = new Date(toDs+'T23:59:59').getTime();
-  const recs = DB.attendance.filter(a=>a.ts>=fromTs && a.ts<=toTs).sort((a,b)=>a.ts-b.ts);
-  const byUser = {};
-  recs.forEach(a=>{
-    if(!byUser[a.userId]) byUser[a.userId] = {userName:a.userName, ms:0, pendingIn:null, stillIn:false};
-    const bucket = byUser[a.userId];
-    if(a.type==='in'){ bucket.pendingIn = a.ts; }
-    else if(a.type==='out' && bucket.pendingIn!=null){ bucket.ms += (a.ts - bucket.pendingIn); bucket.pendingIn = null; }
+function parseHM(t){ const m = /^(\d{1,2}):(\d{2})/.exec(t||''); return m ? (+m[1])*60 + (+m[2]) : 0; }
+function holidayOn(ds){ return DB.pay.holidays.find(h=>h.date===ds) || null; }
+function holidayLabel(h){ return h ? (h.type==='regular'?'Regular holiday':'Special holiday') + (h.name?' ('+h.name+')':'') : ''; }
+function isNightMinute(ms){
+  const d = new Date(ms);
+  const m = d.getHours()*60 + d.getMinutes();
+  const a = parseHM(DB.pay.cfg.nightStart), b = parseHM(DB.pay.cfg.nightEnd);
+  return a>b ? (m>=a || m<b) : (m>=a && m<b);
+}
+function payApprovalFor(userId, ds){ return DB.pay.approvals.find(a=>a.userId===userId && a.date===ds) || null; }
+function money(n){ return '₱' + (Math.round(n*100)/100).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtHM(mins){ const h=Math.floor(mins/60), m=mins%60; return (h? h+'h' : '') + (m? (h?' ':'') + m + 'm' : '') || '0h'; }
+// Pay for one worked day. ins/outs are epoch ms.
+function payForDay(userId, ds, inTs, outTs, pairs){
+  const MIN = 60000, cfg = DB.pay.cfg;
+  const rt = DB.pay.rates[userId] || {};
+  const hr = +rt.hourly||0, otR = +rt.ot||0, ngR = +rt.night||0;
+  const hol = holidayOn(ds);
+  const holMul = hol ? (hol.type==='regular' ? cfg.regPct : cfg.specPct)/100 : 1;
+  const parts = shiftsForUserOnDate(userId, ds);
+  const shift = parts[0];
+  const res = {ds, userId, inTs, outTs, shift, shifts:parts, hol, scheduled:!!shift, dayMins:0, nightMins:0, otMins:0, holMul};
+  let regStart, regEnd;
+  if(parts.length>1){
+    const s0 = new Date(ds+'T00:00:00').getTime();
+    const wins = [];
+    parts.forEach(sh=>{
+      let a = s0 + parseHM(sh.timeIn)*MIN, b = s0 + parseHM(sh.timeOut)*MIN;
+      if(b<=a) b += 86400000;
+      if(wins.length){ const prevEnd = wins[wins.length-1][1]; while(a < prevEnd){ a += 86400000; b += 86400000; } }
+      wins.push([a,b]);
+    });
+    const worked = t => (pairs||[{inTs, outTs}]).some(pr=>pr.inTs<=t && t<pr.outTs);
+    const cap2 = (+cfg.paidHours||8)*60;
+    let base = 0;
+    wins.forEach(w=>{
+      for(let t=Math.ceil(w[0]/MIN)*MIN; t<w[1] && base<cap2; t+=MIN){
+        if(worked(t)){ if(isNightMinute(t)) res.nightMins++; else res.dayMins++; base++; }
+      }
+    });
+    res.regMins = base;
+    const lastEnd = wins[wins.length-1][1];
+    const over = outTs - lastEnd;
+    const extra = over>0 ? Math.floor(over/MIN/30)*30 : 0;
+    const room = Math.max(0, cap2 - base);
+    const extraReg = Math.min(extra, room), extraOT = extra - extraReg;
+    let exDay = 0, exNight = 0;
+    for(let k=0;k<extraReg;k++){ if(isNightMinute(lastEnd + k*MIN)) exNight++; else exDay++; }
+    res.otMins = extra;
+    res.dayPay = res.dayMins/60*hr*holMul;
+    res.nightPay = res.nightMins/60*ngR;
+    res.otPay = exDay/60*hr*holMul + exNight/60*ngR + extraOT/60*otR*holMul;
+    const ap2 = payApprovalFor(userId, ds);
+    res.status = ap2 ? ap2.status : null;
+    res.needsApproval = extra>0;
+    res.payable = res.dayPay + res.nightPay + (res.status==='approved' ? res.otPay : 0);
+    return res;
+  }
+  if(shift){
+    const s0 = new Date(ds+'T00:00:00').getTime();
+    const sStart = s0 + parseHM(shift.timeIn)*MIN;
+    let sEnd = s0 + parseHM(shift.timeOut)*MIN; if(sEnd<=sStart) sEnd += 86400000;
+    res.sStart = sStart; res.sEnd = sEnd;
+    regStart = Math.max(inTs, sStart);               // early clock-in is not paid
+    regEnd = Math.min(outTs, sEnd);
+    const over = outTs - sEnd;
+    res.otMins = over>0 ? Math.floor(over/MIN/30)*30 : 0;   // 30-minute blocks only
+  } else {
+    regStart = inTs;
+    regEnd = inTs + Math.floor((outTs-inTs)/MIN/30)*30*MIN;
+  }
+  const cap = (+cfg.paidHours||8)*60;
+  const brk = Math.max(0, +cfg.breakMins||0);
+  const mins = [];
+  for(let t=Math.ceil(regStart/MIN)*MIN; t<regEnd; t+=MIN){ mins.push(isNightMinute(t)); }
+  if(shift && brk>0 && res.sEnd && (res.sEnd - res.sStart)/MIN >= cap + brk){
+    // the unpaid meal break sits in the middle of the shift: take it out of daytime minutes first
+    const dayIdx = []; mins.forEach((n,i)=>{ if(!n) dayIdx.push(i); });
+    const nightIdx = []; mins.forEach((n,i)=>{ if(n) nightIdx.push(i); });
+    const remove = new Set();
+    const fromDay = Math.min(brk, dayIdx.length);
+    const startAt = Math.max(0, Math.floor((dayIdx.length - fromDay)/2));
+    for(let k=0;k<fromDay;k++) remove.add(dayIdx[startAt+k]);
+    const left = brk - fromDay;
+    for(let k=0;k<left && k<nightIdx.length;k++) remove.add(nightIdx[k]);
+    const kept = mins.filter((n,i)=>!remove.has(i));
+    mins.length = 0; kept.forEach(x=>mins.push(x));
+  }
+  if(mins.length > cap) mins.length = cap;
+  mins.forEach(n=>{ if(n) res.nightMins++; else res.dayMins++; });
+  const counted = mins.length;
+  res.regMins = counted;
+  res.dayPay = res.dayMins/60*hr*holMul;
+  res.nightPay = res.nightMins/60*ngR;        // night hours: night rate, no holiday percent
+  res.otPay = res.otMins/60*otR*holMul;
+  const ap = payApprovalFor(userId, ds);
+  res.status = ap ? ap.status : null;
+  if(shift){
+    res.needsApproval = res.otMins>0;
+    res.payable = res.dayPay + res.nightPay + (res.status==='approved' ? res.otPay : 0);
+  } else {
+    res.needsApproval = counted>0;
+    res.payable = res.status==='approved' ? res.dayPay + res.nightPay : 0;
+  }
+  return res;
+}
+function payrollDays(userId, weekStart){
+  const out = [];
+  const nowTs = Date.now();
+  for(let i=0;i<7;i++){
+    const ds = addDays(weekStart, i);
+    const dayStart = new Date(ds+'T00:00:00').getTime();
+    const dayEnd = dayStart + 86400000;
+    const recs = DB.attendance.filter(a=>a.userId===userId && a.ts>=dayStart && a.ts<dayEnd+86400000).sort((a,b)=>a.ts-b.ts);
+    const firstIn = recs.find(a=>a.type==='in' && a.ts<dayEnd);
+    const shifts = shiftsForUserOnDate(userId, ds);
+    const shift = shifts[0];
+    const hol = holidayOn(ds);
+    if(!firstIn){
+      if(shift) out.push({ds, shift, shifts, hol, absent:true, payable:0});
+      continue;
+    }
+    const pairs = [];
+    let open = null;
+    for(const a of recs){
+      if(a.type==='in'){ if(a.ts>=dayEnd) break; open = a; }
+      else if(a.type==='out' && open){ pairs.push({inTs:open.ts, outTs:a.ts}); open = null; if(a.ts>=dayEnd) break; }
+    }
+    if(open || !pairs.length){
+      out.push({ds, shift, shifts, hol, inTs:firstIn.ts, missingOut:true, stillIn: isSignedIn(userId) && ds===dateStr(new Date(nowTs)), payable:0});
+      continue;
+    }
+    out.push(payForDay(userId, ds, pairs[0].inTs, pairs[pairs.length-1].outTs, pairs));
+  }
+  return out;
+}
+function setPayApproval(userId, ds, status){
+  if(!isOwner(currentUser())) return;
+  DB.pay.approvals = DB.pay.approvals.filter(a=>!(a.userId===userId && a.date===ds));
+  if(status) DB.pay.approvals.push({userId, date:ds, status, by:currentUser().name, ts:Date.now()});
+  persist(['pay']);
+  render();
+}
+function payableUsers(){ return DB.users.filter(u=>!isOwner(u)); }
+function openPayRates(userId){ ui.modal = {type:'pay-rates', userId}; render(); }
+function renderPayRatesModal(){
+  const u = DB.users.find(x=>x.id===ui.modal.userId); if(!u) return '';
+  const r = DB.pay.rates[u.id] || {};
+  const inp = (id,label,val)=>`<div class="field"><label>${label}</label><input id="${id}" type="number" min="0" step="any" value="${val!=null&&val!==''?val:''}" placeholder="0.00" /></div>`;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">${escHtml(u.name)}'s rates</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">Pesos per hour. Only you can see these.</p>
+      ${inp('pr-hourly','Hourly rate',r.hourly)}
+      ${inp('pr-ot','Overtime rate',r.ot)}
+      ${inp('pr-night','Night rate (for night hours)',r.night)}
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="savePayRates()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function savePayRates(){
+  const g = id => parseFloat(document.getElementById(id).value);
+  const vals = {hourly:g('pr-hourly'), ot:g('pr-ot'), night:g('pr-night')};
+  for(const k in vals){ if(isNaN(vals[k])) vals[k] = 0; if(vals[k]<0){ showToast('Rates cannot be negative'); return; } }
+  DB.pay.rates[ui.modal.userId] = vals;
+  persist(['pay']);
+  logActivity('updated pay rates');
+  closeModal();
+}
+function openPaySettings(){ ui.modal = {type:'pay-settings'}; render(); }
+function renderPaySettingsModal(){
+  const c = DB.pay.cfg;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Pay settings</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>Night starts</label><input id="ps-ns" type="time" value="${c.nightStart}" /></div>
+        <div class="field" style="flex:1;"><label>Night ends</label><input id="ps-ne" type="time" value="${c.nightEnd}" /></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>Regular holiday %</label><input id="ps-reg" type="number" min="100" step="any" value="${c.regPct}" /></div>
+        <div class="field" style="flex:1;"><label>Special holiday %</label><input id="ps-spl" type="number" min="100" step="any" value="${c.specPct}" /></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>Paid hours per shift</label><input id="ps-hrs" type="number" min="1" step="any" value="${c.paidHours}" /></div>
+        <div class="field" style="flex:1;"><label>Unpaid break (minutes)</label><input id="ps-brk" type="number" min="0" step="1" value="${c.breakMins!=null?c.breakMins:60}" /></div>
+      </div>
+      <p style="font-size:11px;color:var(--text-muted);margin:-4px 0 12px;">A 9-hour shift with a 1-hour break is 8 paid hours. The break is only taken out of shifts long enough to include it.</p>
+      <p style="font-size:11px;color:var(--text-muted);margin:-4px 0 12px;">200% means double pay. Holiday % applies to regular and overtime hours. Night hours are paid at the night rate.</p>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="savePaySettings()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function savePaySettings(){
+  const g = id => document.getElementById(id).value;
+  const reg = parseFloat(g('ps-reg')), spl = parseFloat(g('ps-spl')), hrs = parseFloat(g('ps-hrs')), brk = parseFloat(g('ps-brk'));
+  if(!g('ps-ns') || !g('ps-ne')){ showToast('Set the night start and end time'); return; }
+  if(isNaN(reg)||isNaN(spl)||isNaN(hrs)||isNaN(brk)||brk<0||reg<100||spl<100||hrs<=0){ showToast('Check the percentages and hours'); return; }
+  DB.pay.cfg = Object.assign({}, DB.pay.cfg, {nightStart:g('ps-ns'), nightEnd:g('ps-ne'), regPct:reg, specPct:spl, paidHours:hrs, breakMins:brk});
+  persist(['pay']);
+  closeModal();
+}
+function openHolidayEdit(ds){
+  if(!canManageSchedule(currentUser())) return;
+  ui.modal = {type:'holiday-edit', ds};
+  render();
+}
+function renderHolidayEditModal(){
+  const ds = ui.modal.ds;
+  const h = holidayOn(ds);
+  const label = new Date(ds+'T00:00:00').toLocaleDateString([], {weekday:'long', month:'long', day:'numeric'});
+  const sel = v => (h ? h.type===v : v==='none') ? 'selected' : '';
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">${label}</p>
+      <div class="field"><label>Holiday type</label><select id="ho-type" style="${SEL_STYLE}"><option value="none" ${sel('none')}>Normal day</option><option value="regular" ${sel('regular')}>Regular holiday</option><option value="special" ${sel('special')}>Special holiday</option></select></div>
+      <div class="field"><label>Name (optional)</label><input id="ho-name" value="${escHtml(h?h.name||'':'')}" placeholder="e.g. Christmas Day" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveHolidayEdit()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveHolidayEdit(){
+  const ds = ui.modal.ds;
+  const type = document.getElementById('ho-type').value;
+  const name = document.getElementById('ho-name').value.trim().slice(0,40);
+  DB.pay.holidays = DB.pay.holidays.filter(h=>h.date!==ds);
+  if(type!=='none') DB.pay.holidays.push({date:ds, type, name});
+  persist(['pay']);
+  closeModal();
+}
+function renderClockoutNoteModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Timed out</p>
+      <p style="font-size:14px;margin:0 0 16px;">${escHtml(ui.modal.text)}</p>
+      <button type="button" class="btn" onclick="closeModal()">OK</button>
+    </div>
+  </div>`;
+}
+function openPayDownload(){
+  const to = dateStr(new Date());
+  ui.modal = {type:'pay-download', from:addDays(to,-29), to};
+  render();
+}
+function renderPayDownloadModal(){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Download payroll</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 14px;">Choose the date range to include.</p>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:1;"><label>From</label><input id="pd-from" type="date" value="${ui.modal.from}" /></div>
+        <div class="field" style="flex:1;"><label>To</label><input id="pd-to" type="date" value="${ui.modal.to}" /></div>
+      </div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="downloadPayrollCSV()">Download</button>
+      </div>
+    </div>
+  </div>`;
+}
+function toggleAutoTrimPay(){
+  DB.pay.cfg.autoTrim = !DB.pay.cfg.autoTrim;
+  persist(['pay']);
+  if(DB.pay.cfg.autoTrim) trimOldPay();
+  render();
+}
+function trimOldPay(){
+  if(!DB.pay.cfg.autoTrim) return;
+  const cutoff = addDays(dateStr(new Date()), -40);
+  const a = DB.pay.approvals.length, h = DB.pay.holidays.length;
+  DB.pay.approvals = DB.pay.approvals.filter(x=>x.date>=cutoff);
+  DB.pay.holidays = DB.pay.holidays.filter(x=>x.date>=cutoff);
+  if(a!==DB.pay.approvals.length || h!==DB.pay.holidays.length) persist(['pay']);
+}
+function downloadPayrollCSV(){
+  if(!isOwner(currentUser())) return;
+  const from = document.getElementById('pd-from').value;
+  const to = document.getElementById('pd-to').value;
+  if(!from || !to){ showToast('Pick both dates'); return; }
+  if(from > to){ showToast('"From" date must be before "To" date'); return; }
+  const t = ts => new Date(ts).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+  const rows = [];
+  let total = 0;
+  payableUsers().forEach(u=>{
+    for(let ws = dateStr(mondayOf(new Date(from+'T00:00:00'))); ws<=to; ws = addDays(ws,7)){
+      payrollDays(u.id, ws).filter(d=>d.ds>=from && d.ds<=to).forEach(d=>{
+        const sched = (d.shifts&&d.shifts.length) ? d.shifts.map(sh=>sh.timeIn+'-'+sh.timeOut).join(' + ') : 'Not scheduled';
+        const hol = d.hol ? holidayLabel(d.hol) : '';
+        if(d.absent){ rows.push([u.name, d.ds, sched, hol, '', '', 'Not worked', '', '', '', '', 0]); return; }
+        if(d.missingOut){ rows.push([u.name, d.ds, sched, hol, t(d.inTs), '', 'No time out', '', '', '', '', 0]); return; }
+        const pay = Math.round(d.payable*100)/100;
+        total += pay;
+        rows.push([u.name, d.ds, sched, hol, t(d.inTs), t(d.outTs), d.status || (d.needsApproval?'Pending':''), (d.dayMins/60).toFixed(2), (d.nightMins/60).toFixed(2), (d.otMins/60).toFixed(2), (d.needsApproval && !d.scheduled) ? 'Unscheduled' : '', pay]);
+      });
+    }
   });
-  return Object.keys(byUser).map(uid=>({
-    userId: uid,
-    userName: byUser[uid].userName,
-    hours: byUser[uid].ms/3600000,
-    stillClockedIn: byUser[uid].pendingIn!=null
-  })).sort((a,b)=>b.hours-a.hours);
+  if(!rows.length){ showToast('Nothing to download for that range'); return; }
+  rows.push(['TOTAL PAY','','','','','','','','','','', Math.round(total*100)/100]);
+  downloadCSV(`payroll-${from}_to_${to}.csv`, ['Name','Date','Scheduled shift','Holiday','Time in','Time out','Approval','Regular hours','Night hours','Overtime hours','Note','Pay (PHP)'], rows);
+  closeModal();
 }
 function renderPayrollHours(){
   if(!ui.payrollWeekStart) ui.payrollWeekStart = dateStr(mondayOf(new Date()));
   const weekStart = ui.payrollWeekStart;
   const weekEnd = addDays(weekStart, 6);
   const weekLabel = new Date(weekStart+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + new Date(weekEnd+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
-  const results = computeHoursForRange(weekStart, weekEnd);
-  const totalHours = results.reduce((s,r)=>s+r.hours,0);
-  const rows = results.length ? results.map(r=>`
-    <div class="team-row">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">${r.userName}</p>${r.stillClockedIn?'<p style="font-size:11px;color:var(--text-muted);margin:0;">Currently clocked in</p>':''}</div>
-      <span style="font-size:13px;font-weight:600;">${r.hours.toFixed(1)} hrs</span>
-    </div>`).join('') : `<div class="empty-note">No completed time in/out pairs this week.</div>`;
+  let grand = 0, pendingCount = 0;
+  const cards = payableUsers().map(u=>{
+    const days = payrollDays(u.id, weekStart);
+    const total = days.reduce((s,d)=>s+(d.payable||0),0);
+    grand += total;
+    const rt = DB.pay.rates[u.id];
+    const hasRates = rt && (+rt.hourly>0);
+    const rows = days.map(d=>{
+      const dt = new Date(d.ds+'T00:00:00').toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+      const holTag = d.hol ? ` · <span style="color:var(--urgent);">${escHtml(holidayLabel(d.hol))}</span>` : '';
+      const sched = (d.shifts&&d.shifts.length) ? d.shifts.map(sh=>formatTimeShort(sh.timeIn)+'–'+formatTimeShort(sh.timeOut)).join(' + ') : 'Not scheduled';
+      const tt = ts => new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+      let detail='', right='', action='';
+      if(d.absent){
+        detail = 'Scheduled ' + sched + ' · not worked' + (d.hol?', no holiday pay':'');
+        right = money(0);
+      } else if(d.missingOut){
+        detail = `Timed in ${tt(d.inTs)} · ${d.stillIn?'still clocked in':'no time out recorded'}`;
+        right = '—';
+      } else {
+        const parts = [];
+        if(d.dayMins || !d.nightMins) parts.push(`${fmtHM(d.dayMins)} regular`);
+        if(d.nightMins) parts.push(`${fmtHM(d.nightMins)} night`);
+        if(d.otMins) parts.push(`${fmtHM(d.otMins)} ${(d.shifts&&d.shifts.length>1)?'extra time':'overtime'}`);
+        detail = `${sched} · in ${tt(d.inTs)} · out ${tt(d.outTs)}<br>${parts.join(' · ')}`;
+        right = money(d.payable);
+        if(d.needsApproval){
+          const label = d.scheduled ? 'Overtime' : 'Unscheduled day';
+          if(!d.status){
+            pendingCount++;
+            action = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;"><span style="font-size:11px;color:var(--urgent);font-weight:600;">${label} needs approval</span><button class="btn" style="width:auto;padding:4px 10px;font-size:11px;" onclick="setPayApproval('${u.id}','${d.ds}','approved')">Approve</button><button class="btn btn-secondary" style="width:auto;padding:4px 10px;font-size:11px;" onclick="setPayApproval('${u.id}','${d.ds}','declined')">Decline</button></div>`;
+          } else {
+            action = `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">${label} ${d.status} <button class="link-btn" style="font-size:11px;" onclick="setPayApproval('${u.id}','${d.ds}',null)">Undo</button></div>`;
+          }
+        }
+      }
+      return `<div style="padding:8px 0;border-top:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;gap:8px;"><p style="font-size:12px;font-weight:600;margin:0;">${dt}${holTag}</p><p style="font-size:13px;font-weight:600;margin:0;white-space:nowrap;">${right}</p></div>
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${detail}</p>${action}
+      </div>`;
+    }).join('') || `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">No shifts or time records this week.</p>`;
+    return `<div class="card" style="margin-bottom:12px;padding:12px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div><p style="font-size:14px;font-weight:700;margin:0;">${escHtml(u.name)}</p>
+        ${hasRates ? `<button class="link-btn" style="font-size:11px;" onclick="openPayRates('${u.id}')">${money(rt.hourly)}/hr · OT ${money(rt.ot||0)} · night ${money(rt.night||0)} · edit</button>` : `<button class="link-btn" style="font-size:11px;color:var(--urgent);" onclick="openPayRates('${u.id}')">Set rates</button>`}</div>
+        <p style="font-size:16px;font-weight:700;margin:0;">${money(total)}</p>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('') || `<div class="empty-note">No staff yet.</div>`;
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Hours &amp; Payroll</p></div></header>
   <div class="screen" style="padding-top:0;">
@@ -3839,12 +4451,21 @@ function renderPayrollHours(){
       <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftPayrollWeek(1)">Next ›</button>
     </div>
-    <div class="card" style="background:var(--accent-light);margin-bottom:14px;">
-      <p style="margin:0 0 4px;font-size:12px;color:var(--accent);font-weight:600;">TOTAL HOURS (ALL STAFF)</p>
-      <p style="margin:0;font-size:22px;font-weight:700;color:var(--accent);">${totalHours.toFixed(1)} hrs</p>
+    <div class="card" style="background:var(--accent-light);margin-bottom:12px;">
+      <p style="margin:0 0 4px;font-size:12px;color:var(--accent);font-weight:600;">TOTAL PAY THIS WEEK (APPROVED)</p>
+      <p style="margin:0;font-size:22px;font-weight:700;color:var(--accent);">${money(grand)}</p>
+      ${pendingCount?`<p style="margin:4px 0 0;font-size:11px;color:var(--urgent);font-weight:600;">${pendingCount} item${pendingCount===1?'':'s'} waiting for your approval</p>`:''}
     </div>
-    <div class="card">${rows}</div>
-    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Based on completed time in/out pairs. Hours are computed on the fly — nothing extra is stored.</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button class="btn btn-secondary" style="flex:1;" onclick="openPaySettings()">Pay settings</button>
+      <button class="btn btn-secondary" style="flex:1;" onclick="openPayDownload()">⬇ Download</button>
+    </div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete after 40 days</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Removes old approvals and holiday marks. Download first to keep a record. Time in/out records have their own setting.</p></div>
+      <button class="btn ${DB.pay.cfg.autoTrim?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimPay()">${DB.pay.cfg.autoTrim?'On':'Off'}</button>
+    </div>
+    ${cards}
+    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:6px;">Pay is based on the schedule: up to ${DB.pay.cfg.paidHours} paid hours per shift, early time in is not paid, and overtime counts in 30-minute blocks after the shift ends. Mark holidays from a person's schedule.</p>
   </div>`;
 }
 
@@ -3974,6 +4595,8 @@ function backupAllData(){
     notes: DB.notes,
     salesReports: DB.salesReports,
     deliveries: DB.deliveries,
+    pay: DB.pay,
+    menu: DB.menu,
     settings: DB.settings
   };
   downloadJSON(`backup-${dateStr(new Date())}.json`, payload);
@@ -4004,8 +4627,8 @@ function confirmResetAllData(){
 }
 function resetAllData(){
   const owners = DB.users.filter(u=>u.role==='owner');
-  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[] };
-  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks','freshProduceChecks','deliveries']);
+  DB = { users: owners, locations:[], items:[], recipes:[], activity:[], invites:[], attendance:[], wastage:[], settings:{shiftStart:'08:00', managerCanManageSchedule:false, autoTrimAttendance:false, managerCanManageChecklists:false}, oilLog:[], shifts:[], schedule:[], securityLog:[], events:[], checklists:[], checklistRuns:[], notes:[], priorityChecks:[], salesReports:[], shoppingMarks:[], freshProduceChecks:[], deliveries:[], pay:payInit(null), menu:[] };
+  persist(['users','locations','items','recipes','activity','invites','attendance','wastage','settings','oilLog','shifts','schedule','securityLog','events','checklists','checklistRuns','notes','priorityChecks','salesReports','shoppingMarks','freshProduceChecks','deliveries','pay','menu']);
   ui.modal = null;
   ui.screen = 'main'; ui.tab = 'home';
   showToast('All data has been reset');

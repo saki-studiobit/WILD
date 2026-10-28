@@ -598,22 +598,40 @@ function toggleManagerChecklistAccess(){
   persist(['settings']);
   render();
 }
+function checklistFreq(cl){ return (cl && cl.freq) || (cl && cl.type==='weekly' ? 'weekly' : 'daily'); }
+function checklistAudience(cl){ return (cl && cl.audience) || (cl && cl.type==='opening' ? 'opening' : cl && cl.type==='closing' ? 'closing' : 'all'); }
+function weekStartOf(ds){ return dateStr(mondayOf(new Date(ds+'T00:00:00'))); }
+function runKeyFor(cl, ds){ return checklistFreq(cl)==='weekly' ? weekStartOf(ds) : ds; }
+function findRunFor(cl, key){ return DB.checklistRuns.find(r=>r.checklistId===cl.id && r.date===key); }
 function runForToday(checklistId){
-  const today = dateStr(new Date());
-  let run = DB.checklistRuns.find(r=>r.checklistId===checklistId && r.date===today);
+  const cl = DB.checklists.find(c=>c.id===checklistId);
+  const key = runKeyFor(cl, dateStr(new Date()));
+  let run = DB.checklistRuns.find(r=>r.checklistId===checklistId && r.date===key);
   if(!run){
-    run = {id:uid('run'), checklistId, date:today, checkedTaskIds:[], completedBy:'', ts:Date.now()};
+    run = {id:uid('run'), checklistId, date:key, checkedTaskIds:[], checks:{}, completedBy:'', ts:Date.now()};
     DB.checklistRuns.push(run);
   }
+  if(!run.checks) run.checks = {};
   return run;
+}
+function myChecklistKinds(u){
+  const parts = shiftsForUserOnDate(u.id, dateStr(new Date()));
+  const kinds = new Set();
+  if(parts.length>1){ kinds.add('opening'); kinds.add('closing'); }
+  else if(parts.length===1){ const k = shiftKindOf(parts); if(k) kinds.add(k); }
+  return kinds;
 }
 function openChecklistHub(){ ui.screen='checklist-hub'; render(); }
 const CHECKLIST_RUN_RETENTION_MS = 2*24*60*60*1000;
 function trimOldChecklistRuns(){
   if(DB.settings.autoTrimChecklistRuns === false) return;
   const cutoff = dateStr(new Date(Date.now() - CHECKLIST_RUN_RETENTION_MS));
+  const weeklyCutoff = dateStr(new Date(Date.now() - 35*24*60*60*1000));
   const before = DB.checklistRuns.length;
-  DB.checklistRuns = DB.checklistRuns.filter(r=>r.date >= cutoff);
+  DB.checklistRuns = DB.checklistRuns.filter(r=>{
+    const cl = DB.checklists.find(c=>c.id===r.checklistId);
+    return checklistFreq(cl)==='weekly' ? r.date >= weeklyCutoff : r.date >= cutoff;
+  });
   if(DB.checklistRuns.length !== before) persist(['checklistRuns']);
 }
 function toggleAutoTrimChecklistRuns(){
@@ -626,8 +644,8 @@ function openChecklistRun(checklistId){ ui.screen='checklist-run'; ui.activeChec
 function toggleChecklistTask(checklistId, taskId){
   const run = runForToday(checklistId);
   const idx = run.checkedTaskIds.indexOf(taskId);
-  if(idx>-1) run.checkedTaskIds.splice(idx,1);
-  else run.checkedTaskIds.push(taskId);
+  if(idx>-1){ run.checkedTaskIds.splice(idx,1); delete run.checks[taskId]; }
+  else { run.checkedTaskIds.push(taskId); run.checks[taskId] = {by:currentUser().name, ts:Date.now()}; }
   run.completedBy = currentUser().name;
   run.ts = Date.now();
   persist(['checklistRuns']);
@@ -656,18 +674,20 @@ function openChecklistEditScreen(checklistId){ ui.screen='checklist-edit'; ui.ac
 function openTaskFormModal(checklistId, taskId){
   const cl = DB.checklists.find(c=>c.id===checklistId);
   const task = taskId ? cl.tasks.find(t=>t.id===taskId) : null;
-  ui.modal = {type:'checklist-task-form', checklistId, taskId: taskId||null, text: task?task.text:''};
+  ui.modal = {type:'checklist-task-form', checklistId, taskId: taskId||null, text: task?task.text:'', dueDay: task && task.dueDay!=null ? task.dueDay : ''};
   render();
 }
 function saveTaskForm(){
   const text = document.getElementById('task-text').value.trim();
   if(!text){ showToast('Enter a task'); return; }
   const cl = DB.checklists.find(c=>c.id===ui.modal.checklistId);
+  const dueEl = document.getElementById('task-due');
+  const dueDay = dueEl && dueEl.value!=='' ? parseInt(dueEl.value,10) : null;
   if(ui.modal.taskId){
     const t = cl.tasks.find(t=>t.id===ui.modal.taskId);
-    t.text = text;
+    t.text = text; t.dueDay = dueDay;
   } else {
-    cl.tasks.push({id:uid('tsk'), text});
+    cl.tasks.push({id:uid('tsk'), text, dueDay});
   }
   persist(['checklists']);
   closeModal();
@@ -706,6 +726,13 @@ function savePhone(){
   persist(['users']);
   closeModal();
 }
+function setChecklistProp(id, key, val){
+  const cl = DB.checklists.find(c=>c.id===id);
+  if(!cl || !canManageChecklists(currentUser())) return;
+  cl[key] = val;
+  persist(['checklists']);
+  render();
+}
 function openNewChecklistModal(){
   ui.modal = {type:'checklist-new'};
   render();
@@ -713,7 +740,7 @@ function openNewChecklistModal(){
 function saveNewChecklist(){
   const name = document.getElementById('newcl-name').value.trim();
   if(!name){ showToast('Enter a name'); return; }
-  DB.checklists.push({id:uid('cl'), type:'custom', name, tasks:[]});
+  DB.checklists.push({id:uid('cl'), type:'custom', name, tasks:[], audience:document.getElementById('newcl-aud').value, freq:document.getElementById('newcl-freq').value});
   persist(['checklists']);
   closeModal();
 }
@@ -1701,7 +1728,7 @@ function changeRole(userId, newRole){
     logActivity(`changed ${u.name}'s role to ${newRole}`);
   };
   if(newRole==='owner'){
-    openConfirmModal(`Make ${u.name} a co-owner? They'll get full owner access, including attendance policy and inviting managers.`, apply);
+    openConfirmModal(`Make ${u.name} a co-owner? They'll get full owner access, including attendance policy and inviting Team Leaders.`, apply);
   } else {
     apply();
     render();
@@ -1719,6 +1746,7 @@ function removeUser(userId){
 
 /* ---------- rendering ---------- */
 const RECIPES_TAB_ENABLED = false;
+function roleLabel(r){ return r==='manager' ? 'Team Leader' : r; }
 function recipesHiddenFor(u){ return !RECIPES_TAB_ENABLED || !!(DB.settings.hideRecipes && u && !isOwner(u)); }
 function toggleHideRecipes(){
   if(!isOwner(currentUser())) return;
@@ -1759,7 +1787,7 @@ function updateWatermark(){
   const wm = document.getElementById('watermark-fixed');
   if(!wm) return;
   const u = currentUser();
-  wm.textContent = u ? `${u.name} · ${u.role} · ${new Date().toLocaleString()}` : '';
+  wm.textContent = u ? `${u.name} · ${roleLabel(u.role)} · ${new Date().toLocaleString()}` : '';
 }
 function render(){
   updateWatermark();
@@ -1774,7 +1802,7 @@ function render(){
   if(ui.screen==='attendance-person'){ body = renderAttendancePerson(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='attendance-today'){ body = renderAttendanceToday(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='alert-list'){ body = renderAlertList(); app.innerHTML = body + renderModal(); return; }
-  if(ui.screen==='shopping-list'){ body = renderShoppingList(); app.innerHTML = body; return; }
+  if(ui.screen==='shopping-list'){ body = renderShoppingList(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='manage-locations'){ body = renderManageLocations(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='attendance-policy'){ body = renderAttendancePolicy(); app.innerHTML = body + renderModal(); return; }
   if(ui.screen==='shifts-manage'){ body = renderShiftsManage(); app.innerHTML = body + renderModal(); return; }
@@ -1853,10 +1881,10 @@ function renderAuth(){
       <label>I am a</label>
       <div class="role-toggle">
         <div class="role-opt ${ui.authRole==='staff'?'active':''}" onclick="ui.authRole='staff';render();">Staff</div>
-        <div class="role-opt ${ui.authRole==='manager'?'active':''}" onclick="ui.authRole='manager';render();">Manager</div>
+        <div class="role-opt ${ui.authRole==='manager'?'active':''}" onclick="ui.authRole='manager';render();">Team Leader</div>
       </div>
     </div>
-    ${ui.authRole==='manager' ? `<div class="field"><label>Manager invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>` : `<div class="field"><label>Staff invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>`}
+    ${ui.authRole==='manager' ? `<div class="field"><label>Team Leader invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>` : `<div class="field"><label>Staff invite code</label><input id="reg-invite" placeholder="6-digit code from the owner" /></div>`}
     ` : ''}
     <p class="error-text" id="auth-error"></p>
     <button class="btn" type="button" onclick="handleRegister()">${hasUsers?'Create account':'Set up workspace'}</button>
@@ -1892,6 +1920,167 @@ function toggleShoppingMark(key){
   }
   persist(['shoppingMarks']);
   render();
+}
+function orderMsgDefaults(){
+  return {cafe:'Wild Cafe', template:'Hi {supplier}, this is {cafe} placing an order for delivery tomorrow:\n\n{items}\n\nPlease confirm. Thank you!\nOrdered by {name} ({role})', perSupplier:{}};
+}
+function orderMsgCfg(){
+  const d = orderMsgDefaults();
+  const c = DB.settings.orderMsg || {};
+  return {cafe: c.cafe!=null ? c.cafe : d.cafe, template: c.template || d.template, perSupplier: c.perSupplier || {}};
+}
+function fillOrderTemplate(tpl, vars){
+  return tpl.replace(/\{(supplier|items|cafe|name|role)\}/g, (m,k)=>vars[k]!=null?vars[k]:m);
+}
+function openOrderMessage(supplierName){
+  if(!isMgr(currentUser())) return;
+  const groups = groupedProductStatuses().filter(g=>g.status!=='ok' && ((g.supplier||'').trim()===supplierName));
+  const pending = groups.filter(g=>!DB.shoppingMarks.some(m=>m.key===shoppingMarkKey(g.itemIds)));
+  if(!pending.length){ showToast('Everything for this supplier is already marked ordered'); return; }
+  const cfg = orderMsgCfg();
+  const key = supplierKey(supplierName);
+  const tpl = cfg.perSupplier[key] || cfg.template;
+  const u = currentUser();
+  const text = fillOrderTemplate(tpl, {supplier:supplierName, items:pending.map(g=>'- '+g.name).join('\n'), cafe:cfg.cafe, name:u.name, role:roleLabel(u.role)});
+  const phone = (groups[0] && groups[0].supplierPhone) || '';
+  ui.modal = {type:'order-msg', supplier:supplierName, text, phone, keys:pending.map(g=>shoppingMarkKey(g.itemIds)), mark:true};
+  render();
+}
+function orderMsgFinalText(){
+  const u = currentUser();
+  let t = document.getElementById('om-text').value.trimEnd();
+  if(t.indexOf('Ordered by '+u.name) < 0) t += '\nOrdered by '+u.name+' ('+roleLabel(u.role)+')';
+  return t;
+}
+function orderMsgAfterSend(){
+  const mark = document.getElementById('om-mark');
+  logActivity(`copied/sent order message to ${ui.modal.supplier}`);
+  if(mark && mark.checked){
+    const u = currentUser();
+    ui.modal.keys.forEach(k=>{ if(!DB.shoppingMarks.some(m=>m.key===k)) DB.shoppingMarks.push({key:k, by:u.name, at:Date.now()}); });
+    persist(['shoppingMarks']);
+  }
+}
+function copyOrderMessage(){
+  const ta = document.getElementById('om-text');
+  const text = orderMsgFinalText();
+  const done = ()=>{ showToast('Message copied'); orderMsgAfterSend(); closeModal(); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>{ ta.value = text; ta.select(); try{ document.execCommand('copy'); done(); }catch(e){ showToast('Select the text and copy it'); } });
+  } else {
+    ta.value = text; ta.select(); try{ document.execCommand('copy'); done(); }catch(e){ showToast('Select the text and copy it'); }
+  }
+}
+function textOrderMessage(){
+  const text = orderMsgFinalText();
+  const phone = (ui.modal.phone||'').replace(/[^0-9+]/g,'');
+  if(!phone){ showToast('No phone number saved for this supplier'); return; }
+  orderMsgAfterSend();
+  const url = 'sms:' + phone + '?&body=' + encodeURIComponent(text);
+  closeModal();
+  window.location.href = url;
+}
+function renderOrderMsgModal(){
+  const m = ui.modal;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Message to ${escHtml(m.supplier)}</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 8px;">Add the amounts and change anything you like before sending.</p>
+      <textarea id="om-text" rows="10" style="width:100%;font-size:14px;line-height:1.5;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);">${escHtml(m.text)}</textarea>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0;"><input id="om-mark" type="checkbox" ${m.mark?'checked':''} /> Mark these items as ordered</label>
+      ${m.phone ? '' : `<p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;">No phone number is saved for this supplier, so you can only copy the message.</p>`}
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-secondary" onclick="copyOrderMessage()">Copy message</button>
+        ${m.phone ? `<button type="button" class="btn" onclick="textOrderMessage()">Send by text</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+/* owner: edit the wording */
+function openOrderTemplate(){
+  if(!isOwner(currentUser())) return;
+  const c = orderMsgCfg();
+  ui.modal = {type:'order-template', cafe:c.cafe, template:c.template, sup:'', supText:''};
+  render();
+}
+function syncOrderTemplate(){
+  const g = id => document.getElementById(id);
+  if(g('ot-cafe')) ui.modal.cafe = g('ot-cafe').value;
+  if(g('ot-text')) ui.modal.template = g('ot-text').value;
+  if(g('ot-sup-text')) ui.modal.supText = g('ot-sup-text').value;
+}
+function insertOrderToken(tok){
+  const ta = document.getElementById('ot-text');
+  if(!ta) return;
+  const a = ta.selectionStart, b = ta.selectionEnd;
+  ta.value = ta.value.slice(0,a) + tok + ta.value.slice(b);
+  ta.focus(); ta.selectionStart = ta.selectionEnd = a + tok.length;
+  updateOrderPreview();
+}
+function previewOrderText(tpl, cafe){
+  const u = currentUser();
+  return fillOrderTemplate(tpl, {supplier:'Dairy Co.', items:'- Fresh milk\n- Heavy cream\n- Butter', cafe, name:u.name, role:roleLabel(u.role)});
+}
+function updateOrderPreview(){
+  const g = id => document.getElementById(id);
+  if(g('ot-preview')) g('ot-preview').textContent = previewOrderText(g('ot-text').value, g('ot-cafe').value);
+}
+function pickOrderSupplier(name){
+  syncOrderTemplate();
+  const cfg = orderMsgCfg();
+  ui.modal.sup = name;
+  ui.modal.supText = name ? (cfg.perSupplier[supplierKey(name)] || '') : '';
+  render();
+}
+function saveOrderTemplate(){
+  if(!isOwner(currentUser())) return;
+  syncOrderTemplate();
+  const tpl = ui.modal.template.trim();
+  if(!tpl){ showToast('The message cannot be empty'); return; }
+  const cfg = orderMsgCfg();
+  const per = Object.assign({}, cfg.perSupplier);
+  if(ui.modal.sup){
+    const k = supplierKey(ui.modal.sup);
+    if(ui.modal.supText.trim()) per[k] = ui.modal.supText.trim(); else delete per[k];
+  }
+  DB.settings.orderMsg = {cafe: ui.modal.cafe.trim() || 'our cafe', template: tpl, perSupplier: per};
+  persist(['settings']);
+  showToast('Wording saved');
+  closeModal();
+}
+function resetOrderTemplate(){
+  if(!isOwner(currentUser())) return;
+  const d = orderMsgDefaults();
+  ui.modal.cafe = d.cafe; ui.modal.template = d.template; ui.modal.supText=''; ui.modal.sup='';
+  DB.settings.orderMsg = {cafe:d.cafe, template:d.template, perSupplier:{}};
+  persist(['settings']);
+  render();
+}
+function renderOrderTemplateModal(){
+  const m = ui.modal;
+  const names = supplierNames();
+  const supOpts = `<option value="">None</option>` + names.map(n=>`<option value="${escHtml(n)}" ${m.sup===n?'selected':''}>${escHtml(n)}</option>`).join('');
+  const chips = ['{supplier}','{items}','{cafe}','{name}','{role}'].map(t=>`<span onclick="insertOrderToken('${t}')" style="font-size:12px;padding:4px 10px;border-radius:8px;background:var(--accent-light);color:var(--accent);display:inline-block;margin:0 6px 6px 0;cursor:pointer;">${t}</span>`).join('');
+  const sel = 'width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);';
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet" style="max-height:88vh;overflow:auto;">
+      <p class="modal-title">Order message wording</p>
+      <div class="field"><label>Cafe name</label><input id="ot-cafe" value="${escHtml(m.cafe)}" oninput="updateOrderPreview()" /></div>
+      <div class="field"><label>Message</label><textarea id="ot-text" rows="8" oninput="updateOrderPreview()" style="width:100%;font-size:14px;line-height:1.5;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);">${escHtml(m.template)}</textarea></div>
+      <p style="font-size:11px;color:var(--text-muted);margin:-4px 0 6px;">Tap a blank to add it where your cursor is. They are filled in for each order.</p>
+      <div>${chips}</div>
+      <p style="font-size:12px;font-weight:600;margin:10px 0 4px;">Preview</p>
+      <div id="ot-preview" style="background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:13px;line-height:1.5;white-space:pre-wrap;">${escHtml(previewOrderText(m.template, m.cafe))}</div>
+      <p style="font-size:12px;font-weight:600;margin:14px 0 4px;">Different wording for one supplier (optional)</p>
+      <select style="${sel}" onchange="pickOrderSupplier(this.value)">${supOpts}</select>
+      ${m.sup ? `<textarea id="ot-sup-text" rows="4" placeholder="Leave empty to use the message above" style="width:100%;margin-top:8px;font-size:14px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);">${escHtml(m.supText)}</textarea>` : ''}
+      <div class="modal-row-actions" style="margin-top:12px;">
+        <button type="button" class="btn btn-secondary" onclick="resetOrderTemplate()">Reset to default</button>
+        <button type="button" class="btn" onclick="saveOrderTemplate()">Save wording</button>
+      </div>
+    </div>
+  </div>`;
 }
 function renderShoppingList(){
   const needed = groupedProductStatuses().filter(g=>g.status!=='ok');
@@ -1933,7 +2122,9 @@ function renderShoppingList(){
         </div>
       </div>`;
     }).join('');
-    return `<div class="section-title">${name}${orderedCount?` · ${orderedCount}/${items.length} ordered`:''}</div>${contactLine}<div class="card" style="padding:6px 16px;">${rows}</div>`;
+    const canMsg = isMgr(currentUser()) && name!=='No supplier assigned' && orderedCount < items.length;
+    const msgBtn = canMsg ? `<button class="btn btn-secondary" style="width:auto;padding:6px 12px;font-size:12px;margin:0 0 8px;" onclick="openOrderMessage(${JSON.stringify(name).replace(/"/g,'&quot;')})">💬 Message supplier</button>` : '';
+    return `<div class="section-title">${name}${orderedCount?` · ${orderedCount}/${items.length} ordered`:''}</div>${contactLine}${msgBtn}<div class="card" style="padding:6px 16px;">${rows}</div>`;
   }).join('');
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Shopping List</p></div></header>
@@ -2233,7 +2424,7 @@ function renderRecipes(){
   }).join('') : `<div class="empty-note">No recipes match here yet.</div>`;
   const recipeToggleCard = isOwner(u) ? `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">Show recipes to staff and managers</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Turn off to hide the Recipes tab. Only you will see it.</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Show recipes to staff and Team Leaders</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Turn off to hide the Recipes tab. Only you will see it.</p></div>
       <button class="btn ${DB.settings.hideRecipes?'btn-secondary':''}" style="width:auto;padding:8px 14px;" onclick="toggleHideRecipes()">${DB.settings.hideRecipes?'Off':'On'}</button>
     </div>` : '';
   return `
@@ -2357,11 +2548,11 @@ function renderTeam(){
   const u = currentUser();
   const visibleUsers = isOwner(u) ? DB.users : DB.users.filter(m=>m.role!=='owner');
   const rows = visibleUsers.map(m=>{
-    let control = `<span class="badge badge-neutral" style="text-transform:capitalize;">${m.role}</span>`;
+    let control = `<span class="badge badge-neutral" style="text-transform:capitalize;">${roleLabel(m.role)}</span>`;
     if(isOwner(u) && m.role!=='owner'){
       control = `<select class="role-select" onchange="changeRole('${m.id}', this.value)">
         <option value="staff" ${m.role==='staff'?'selected':''}>Staff</option>
-        <option value="manager" ${m.role==='manager'?'selected':''}>Manager</option>
+        <option value="manager" ${m.role==='manager'?'selected':''}>Team Leader</option>
         <option value="owner">Owner</option>
       </select>`;
     }
@@ -2380,7 +2571,7 @@ function renderTeam(){
     </div>
     <div class="card">
       ${pendingManagerInvites.length ? pendingManagerInvites.map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:16px;letter-spacing:2px;font-weight:600;">${i.code}</span><span class="badge badge-neutral">unused</span></div>`).join('') : `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">No pending invite codes.</p>`}
-      <button class="btn btn-secondary" style="margin-top:10px;" onclick="generateInvite('manager')">Generate manager invite code</button>
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="generateInvite('manager')">Generate Team Leader invite code</button>
     </div>` : '';
   const shiftHtml = canManageSchedule(u) ? `
     <div class="section-title">Schedule</div>
@@ -2479,7 +2670,7 @@ function renderAttendanceReport(){
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Time in/out report</p></div></header>
   <div class="screen" style="padding-top:0;">
     ${DB.attendance.length ? `<button class="btn btn-secondary" style="margin-bottom:12px;" onclick="downloadAttendanceCSV()">⬇ Download CSV (all staff)</button>` : ''}
-    <div class="card">${rows || '<div class="empty-note">No staff or managers yet.</div>'}</div>
+    <div class="card">${rows || '<div class="empty-note">No staff or Team Leaders yet.</div>'}</div>
   </div>`;
 }
 
@@ -2693,7 +2884,7 @@ function renderTeamSchedule(){
       <p style="font-size:13px;font-weight:600;margin:0;">${weekLabel}</p>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;" onclick="shiftTeamScheduleWeek(1)">Next ›</button>
     </div>
-    ${clockers.length ? table : '<div class="empty-note">No staff or managers yet.</div>'}
+    ${clockers.length ? table : '<div class="empty-note">No staff or Team Leaders yet.</div>'}
   </div>`;
 }
 function renderProfile(){
@@ -2714,6 +2905,7 @@ function renderProfile(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openPayrollHoursScreen()">Hours &amp; payroll</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSalesTrendsScreen()">Sales trends</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageTrendsScreen()">Wastage trends</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openOrderTemplate()">Order message wording</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openActivityScreen()">Activity log</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageLogScreen()">Wastage log</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSecurityLogScreen()">Security log</button>
@@ -2729,7 +2921,7 @@ function renderProfile(){
       <div class="avatar" style="width:56px;height:56px;font-size:18px;margin:0 auto 10px;">${initials(u.name)}</div>
       <p style="font-weight:600;font-size:16px;margin:0;">${u.name}</p>
       <p style="font-size:13px;color:var(--text-muted);margin:2px 0 0;">${u.email}</p>
-      <span class="badge badge-neutral" style="margin-top:8px;display:inline-block;text-transform:capitalize;">${u.role}</span>
+      <span class="badge badge-neutral" style="margin-top:8px;display:inline-block;text-transform:capitalize;">${roleLabel(u.role)}</span>
       ${isOwner(u) ? `<div><button class="link-btn" style="margin-top:8px;font-size:12px;" onclick="openNameModal()">Edit name</button></div>` : ''}
     </div>
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
@@ -2738,7 +2930,7 @@ function renderProfile(){
     </div>
     ${scheduleCard}
     ${reportsCard}
-    ${other ? `<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="switchDemoUser('${other.id}')">Switch to ${other.role} view (${other.name})</button>` : ''}
+    ${other ? `<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="switchDemoUser('${other.id}')">Switch to ${roleLabel(other.role)} view (${other.name})</button>` : ''}
     <button class="btn btn-danger" onclick="signOut()">Sign out</button>
   </div>`;
 }
@@ -2760,6 +2952,8 @@ function renderBottomNav(){
 
 function renderModal(){
   if(!ui.modal) return '';
+  if(ui.modal.type==='order-msg') return renderOrderMsgModal();
+  if(ui.modal.type==='order-template') return renderOrderTemplateModal();
   if(ui.modal.type==='menu-item') return renderMenuItemModal();
   if(ui.modal.type==='custom-shift') return renderCustomShiftModal();
   if(ui.modal.type==='pay-download') return renderPayDownloadModal();
@@ -2787,6 +2981,7 @@ function renderModal(){
   if(ui.modal.type==='deliveries-download-form') return renderDeliveriesDownloadModal();
   if(ui.modal.type==='expense-form') return renderExpenseFormModal();
   if(ui.modal.type==='expense-edit') return renderExpenseEditModal();
+  if(ui.modal.type==='tally-cash') return renderTallyModal();
   if(ui.modal.type==='online-form') return renderOnlineFormModal();
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
@@ -2801,7 +2996,7 @@ function renderAttendancePolicy(){
   const u = currentUser();
   const toggleHtml = isOwner(u) ? `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">Manager access</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Let managers manage shifts &amp; schedules too</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Team Leader access</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Let Team Leaders manage shifts &amp; schedules too</p></div>
       <button class="btn ${DB.settings.managerCanManageSchedule?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleManagerScheduleAccess()">${DB.settings.managerCanManageSchedule?'On':'Off'}</button>
     </div>` : '';
   const defaultHtml = `
@@ -2840,7 +3035,7 @@ function renderShiftsManage(){
   const clockers = DB.users.filter(u=>!isOwner(u));
   const staffRows = clockers.map(m=>`
     <div class="team-row" onclick="openScheduleEditScreen('${m.id}')">
-      <div class="team-left"><div class="avatar">${initials(m.name)}</div><div><p style="font-size:13px;font-weight:600;margin:0;">${m.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;text-transform:capitalize;">${m.role}</p></div></div>
+      <div class="team-left"><div class="avatar">${initials(m.name)}</div><div><p style="font-size:13px;font-weight:600;margin:0;">${m.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;text-transform:capitalize;">${roleLabel(m.role)}</p></div></div>
       <span style="color:var(--text-muted);">›</span>
     </div>`).join('');
   return `
@@ -2850,7 +3045,7 @@ function renderShiftsManage(){
     <div class="card">${shiftRows}</div>
     <button class="btn btn-secondary" onclick="openShiftFormModal(null)">+ Add shift</button>
     <div class="section-title">Assign to staff</div>
-    <div class="card">${staffRows || '<div class="empty-note">No staff or managers yet.</div>'}</div>
+    <div class="card">${staffRows || '<div class="empty-note">No staff or Team Leaders yet.</div>'}</div>
   </div>`;
 }
 function formatEventTime(e){ return e.endTime ? e.time+'–'+e.endTime : e.time; }
@@ -3135,7 +3330,7 @@ function renderItemFormModal(){
         <input id="it-track-opened" type="checkbox" ${d.trackOpened?'checked':''} style="width:18px;height:18px;" />
         Can be opened (record opened items when counting)
       </label>
-` : `<p class="mgr-note">Low-stock reminders are set by a manager or owner.</p>`}
+` : `<p class="mgr-note">Low-stock reminders are set by a Team Leader or owner.</p>`}
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn" onclick="saveNewOrEditedItem()">Save</button>
@@ -3303,30 +3498,89 @@ function renderSecurityLog(){
   </div>`;
 }
 
+const CL_COLORS = {opening:'#8BD46E', closing:'#C6A8F0', all:'#8FC7F0', weekly:'#F0C57F'};
+function renderChecklistBox(cl, u, mine){
+  const readOnly = isOwner(u);
+  const today = dateStr(new Date());
+  const weekly = checklistFreq(cl)==='weekly';
+  const run = findRunFor(cl, runKeyFor(cl, today));
+  const checked = id => run && run.checkedTaskIds.includes(id);
+  const total = cl.tasks.length;
+  const done = cl.tasks.filter(t=>checked(t.id)).length;
+  const aud = checklistAudience(cl);
+  const color = weekly ? CL_COLORS.weekly : (CL_COLORS[aud] || CL_COLORS.all);
+  const todayIdx = (new Date().getDay()+6)%7;
+  const DAYN = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const left = total - done;
+  const sub = weekly
+    ? `Resets every Monday · ${left} left`
+    : (aud==='all' ? 'Opening or closing team can do these' : 'Shared by everyone on the team') + ` · ${done} of ${total} done`;
+  const tag = mine ? `<span style="font-size:11px;padding:2px 8px;border-radius:8px;background:var(--accent-light);color:var(--accent);white-space:nowrap;">Your shift</span>` : '';
+  const rows = cl.tasks.map(t=>{
+    const c = checked(t.id);
+    const info = run && run.checks && run.checks[t.id];
+    let right = '';
+    if(c && info){ right = `<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">${escHtml(info.by)}, ${new Date(info.ts).toLocaleString([], weekly?{weekday:'short'}:{hour:'numeric',minute:'2-digit'})}</span>`; }
+    else if(!c && weekly && t.dueDay!=null){
+      const overdue = t.dueDay < todayIdx;
+      right = `<span style="font-size:11px;white-space:nowrap;color:${overdue?'var(--urgent)':'var(--text-muted)'};font-weight:${overdue?'700':'400'};">${overdue?'Overdue, ':'Due '}${DAYN[t.dueDay]}</span>`;
+    }
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);${readOnly?'':'cursor:pointer;'}" ${readOnly?'':`onclick="toggleChecklistTask('${cl.id}','${t.id}')"`}>
+      <span style="width:20px;height:20px;border-radius:5px;border:1.5px solid ${c?color:'var(--border)'};background:${c?color:'transparent'};flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;color:#20261F;">${c?'&#10003;':''}</span>
+      <span style="flex:1;font-size:13px;${c?'text-decoration:line-through;color:var(--text-muted);':''}">${escHtml(t.text)}</span>${right}
+    </div>`;
+  }).join('') || `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">No tasks yet.</p>`;
+  const editBtn = canManageChecklists(u) ? `<button class="link-btn" style="font-size:12px;margin-top:8px;" onclick="openChecklistEditScreen('${cl.id}')">Edit</button>` : '';
+  return `<div class="card" style="border-left:4px solid ${color};border-radius:0 12px 12px 0;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div><p style="font-size:14px;font-weight:700;margin:0;">${escHtml(cl.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${sub}</p></div>${tag}
+    </div>
+    <div style="height:6px;border-radius:3px;background:var(--border);margin:8px 0 4px;overflow:hidden;"><div style="height:6px;width:${total?Math.round(done/total*100):0}%;background:${color};"></div></div>
+    ${rows}${editBtn}
+  </div>`;
+}
+function weeklyHistoryHtml(){
+  const weekly = DB.checklists.filter(cl=>checklistFreq(cl)==='weekly' && cl.tasks.length);
+  if(!weekly.length) return '';
+  const thisWeek = weekStartOf(dateStr(new Date()));
+  const blocks = weekly.map(cl=>{
+    const own = DB.checklistRuns.filter(r=>r.checklistId===cl.id).map(r=>r.date).sort();
+    const earliest = own.length ? own[0] : '9999-12-31';
+    const lines = [1,2,3,4].map(n=>{
+      const ws = addDays(thisWeek, -7*n);
+      const run = findRunFor(cl, ws) || (ws >= earliest ? {checkedTaskIds:[]} : null);
+      if(!run) return '';
+      const missed = cl.tasks.filter(t=>!run.checkedTaskIds.includes(t.id));
+      const label = new Date(ws+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) + ' to ' + new Date(addDays(ws,6)+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'});
+      return `<div style="padding:8px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;"><div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(cl.name)}, ${label}</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${cl.tasks.length-missed.length} of ${cl.tasks.length} done${missed.length?' · not done: '+escHtml(missed.map(t=>t.text).join(', ')):''}</p></div>${missed.length?`<span style="font-size:11px;padding:2px 8px;border-radius:8px;background:var(--urgent-bg);color:var(--urgent);white-space:nowrap;align-self:flex-start;">${missed.length} missed</span>`:''}</div>`;
+    }).join('');
+    return lines;
+  }).join('');
+  if(!blocks.trim()) return '';
+  return `<div class="section-title">Past weeks</div><div class="card" style="padding:2px 16px;">${blocks}</div>`;
+}
 function renderChecklistHub(){
   const u = currentUser();
-  const today = dateStr(new Date());
-  const rows = DB.checklists.map(cl=>{
-    const run = DB.checklistRuns.find(r=>r.checklistId===cl.id && r.date===today);
-    const done = run ? run.checkedTaskIds.length : 0;
-    const total = cl.tasks.length;
-    const complete = total>0 && done===total;
-    const editBtn = canManageChecklists(u) ? `<button class="link-btn" style="margin-right:10px;" onclick="event.stopPropagation();openChecklistEditScreen('${cl.id}')">Edit</button>` : '';
-    return `<div class="team-row" onclick="openChecklistRun('${cl.id}')">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">${cl.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${done}/${total} done today${complete?' ✅':''}</p></div>
-      <div style="display:flex;align-items:center;">${editBtn}<span style="color:var(--text-muted);">›</span></div>
-    </div>`;
+  const kinds = myChecklistKinds(u);
+  const order = cl => { const w = checklistFreq(cl)==='weekly'; const a = checklistAudience(cl); return (w?3:0) + (a==='opening'?0:a==='closing'?1:2); };
+  const sorted = DB.checklists.slice().sort((a,b)=>order(a)-order(b));
+  const boxes = sorted.map(cl=>{
+    const aud = checklistAudience(cl);
+    const mine = checklistFreq(cl)!=='weekly' && (aud==='opening'||aud==='closing') && kinds.has(aud);
+    return renderChecklistBox(cl, u, mine);
   }).join('');
   const autoTrimOn = DB.settings.autoTrimChecklistRuns !== false;
   const retentionHtml = isOwner(u) ? `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete checklist history</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Removes completed checklist records older than 2 days. Today's progress always shows.</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Auto-delete checklist history</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Removes daily results older than 2 days and weekly results older than 4 weeks. Current progress always shows.</p></div>
       <button class="btn ${autoTrimOn?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleAutoTrimChecklistRuns()">${autoTrimOn?'On':'Off'}</button>
     </div>` : '';
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Checklists</p></div></header>
   <div class="screen" style="padding-top:0;">
-    <div class="card">${rows || '<div class="empty-note">No checklists set up yet.</div>'}</div>
+    ${isOwner(u) ? `<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">View only. Staff tick the tasks.</p>` : ''}
+    ${boxes || '<div class="empty-note">No checklists set up yet.</div>'}
+    ${isOwner(u) ? weeklyHistoryHtml() : ''}
     ${retentionHtml}
   </div>`;
 }
@@ -3442,7 +3696,7 @@ function renderMorningPriority(){
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Morning Priority Inventory</p></div></header>
   <div class="screen" style="padding-top:0;">
     ${total ? `<div class="chip-row">${catChips}</div>` : ''}
-    ${sections || '<div class="empty-note">No items pinned yet. Owners and managers can pin items from the item edit screen in Inventory.</div>'}
+    ${sections || '<div class="empty-note">No items pinned yet. Owners and Team Leaders can pin items from the item edit screen in Inventory.</div>'}
   </div>`;
 }
 function renderFreshProduce(){
@@ -3469,7 +3723,7 @@ function renderFreshProduce(){
         <div><p style="font-size:13px;font-weight:600;margin:0;${check?'color:var(--text-muted);':''}">${i.name}</p>${check?`<p style="font-size:11px;color:var(--text-muted);margin:0;">Checked by ${check.checkedBy}</p>`:''}</div>
       </div>
     </div>`;
-  }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and managers can include an item from the item edit screen in Inventory.</div>`;
+  }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and Team Leaders can include an item from the item edit screen in Inventory.</div>`;
 
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
@@ -3492,7 +3746,7 @@ function renderChecklistManage(){
     </div>`).join('');
   const toggleHtml = isOwner(u) ? `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">Manager access</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Let managers edit checklist tasks too</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">Team Leader access</p><p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Let Team Leaders edit checklist tasks too</p></div>
       <button class="btn ${DB.settings.managerCanManageChecklists?'':'btn-secondary'}" style="width:auto;padding:8px 14px;" onclick="toggleManagerChecklistAccess()">${DB.settings.managerCanManageChecklists?'On':'Off'}</button>
     </div>` : '';
   return `
@@ -3516,9 +3770,17 @@ function renderChecklistEdit(){
         <button class="link-btn" style="color:var(--urgent);" onclick="removeChecklistTask('${cl.id}','${t.id}')">Delete</button>
       </div>
     </div>`).join('');
+  const audChip = (v,l)=>`<div class="chip ${checklistAudience(cl)===v?'active':''}" onclick="setChecklistProp('${cl.id}','audience','${v}')">${l}</div>`;
+  const frqChip = (v,l)=>`<div class="chip ${checklistFreq(cl)===v?'active':''}" onclick="setChecklistProp('${cl.id}','freq','${v}')">${l}</div>`;
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="openChecklistManageScreen()">‹</button><p class="greet" style="font-size:16px;">${cl.name}</p></div></header>
   <div class="screen" style="padding-top:0;">
+    <div class="card">
+      <p style="font-size:12px;font-weight:600;margin:0 0 6px;">Who is it for?</p>
+      <div class="chip-row" style="margin:0 0 10px;">${audChip('opening','Opening')}${audChip('closing','Closing')}${audChip('all','Everyone')}</div>
+      <p style="font-size:12px;font-weight:600;margin:0 0 6px;">How often?</p>
+      <div class="chip-row" style="margin:0;">${frqChip('daily','Every day')}${frqChip('weekly','Once a week')}</div>
+    </div>
     <div class="card">${rows || '<div class="empty-note">No tasks yet.</div>'}</div>
     <button class="btn btn-secondary" onclick="openTaskFormModal('${cl.id}', null)">+ Add task</button>
   </div>`;
@@ -3527,7 +3789,8 @@ function renderTaskFormModal(){
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
     <div class="modal-sheet">
       <p class="modal-title">${ui.modal.taskId ? 'Edit task' : 'New task'}</p>
-      <div class="field"><input id="task-text" value="${ui.modal.text||''}" placeholder="e.g. Wipe down all tables" /></div>
+      <div class="field"><input id="task-text" value="${escHtml(ui.modal.text||'')}" placeholder="e.g. Wipe down all tables" /></div>
+      ${checklistFreq(DB.checklists.find(c=>c.id===ui.modal.checklistId))==='weekly' ? `<div class="field"><label>Due this week (optional)</label><select id="task-due" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);"><option value="">Any day</option>${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((d,i)=>`<option value="${i}" ${String(ui.modal.dueDay)===String(i)?'selected':''}>${d}</option>`).join('')}</select></div>` : ''}
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn" onclick="saveTaskForm()">Save</button>
@@ -3540,6 +3803,8 @@ function renderNewChecklistModal(){
     <div class="modal-sheet">
       <p class="modal-title">New checklist</p>
       <div class="field"><label>Name</label><input id="newcl-name" placeholder="e.g. Monthly Deep Clean" /></div>
+      <div class="field"><label>Who is it for?</label><select id="newcl-aud" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);"><option value="all">Everyone (opening or closing team)</option><option value="opening">Opening team</option><option value="closing">Closing team</option></select></div>
+      <div class="field"><label>How often?</label><select id="newcl-freq" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--surface);color:var(--text);"><option value="daily">Every day</option><option value="weekly">Once a week</option></select></div>
       <div class="modal-row-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn" onclick="saveNewChecklist()">Create</button>
@@ -3593,6 +3858,12 @@ function ensureSalesReport(date){
 }
 function expensesTotal(r){ return r.expenses.reduce((s,e)=>s+e.amount,0); }
 function drawerExpensesTotal(r){ return r.expenses.filter(e=>!e.noDrawer).reduce((s,e)=>s+e.amount,0); }
+function cashCheckOf(r){
+  if(r.tallyCash==null) return null;
+  const expected = (r.cashFunds||0) + r.tallyCash - drawerExpensesTotal(r);
+  const counted = cashDrawerTotal(r);
+  return {expected, counted, diff: Math.round((counted - expected)*100)/100};
+}
 function cashSalesOf(r){ return cashDrawerTotal(r) - (r.cashFunds||0) + drawerExpensesTotal(r); }
 function cashDrawerTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashDrawer[d]||0),0); }
 function cashFundsBreakdownTotal(r){ return CASH_DENOMS.reduce((s,d)=>s+d*(r.cashFundsBreakdown[d]||0),0); }
@@ -3678,6 +3949,10 @@ function renderSalesReport(){
       <div><p style="font-size:13px;font-weight:600;margin:0;">📱 Online Sales</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.online.length} entr${r.online.length===1?'y':'ies'}</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(onlineSalesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
+    <div class="team-row" ${editable?'onclick="openTallyModal()"':''}>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">🧾 Cash sales (your tally)</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Total cash sales from receipts or tally</p></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${r.tallyCash!=null?peso(r.tallyCash):'Not entered'}</span>${editable?'<span style="color:var(--text-muted);">›</span>':''}</div>
+    </div>
     <div class="team-row" onclick="openMorningCashCountScreen(true)">
       <div><p style="font-size:13px;font-weight:600;margin:0;">🌅 Cash Funds (morning)</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Starting cash in drawer</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(r.cashFunds)}</span><span style="color:var(--text-muted);">›</span></div>
@@ -3702,12 +3977,53 @@ function renderSalesReport(){
       <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Cash sales ${peso(cashSales)} + Online ${peso(onlineSalesTotal(r))}</p>
     </div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${isOwner(u) ? renderCashCheckCard(r) : ''}
     ${!editable && !r.reportLocked ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">${date===today?'View only.':'Past reports are view only.'}</p>` : ''}
     ${submitReportBtn}
     ${lockedBanner}
   </div>`;
 }
 
+function renderCashCheckCard(r){
+  const c = cashCheckOf(r);
+  if(!c) return `<div class="card" style="margin-top:12px;"><p style="margin:0;font-size:12px;font-weight:600;color:var(--text-muted);">CASH CHECK (ONLY YOU SEE THIS)</p><p style="margin:6px 0 0;font-size:12px;color:var(--text-muted);">The cash sales tally has not been entered for this day yet.</p></div>`;
+  const off = c.diff!==0;
+  const word = c.diff<0 ? 'Short by ' + peso(-c.diff) : c.diff>0 ? 'Over by ' + peso(c.diff) : 'Matches';
+  return `<div class="card" style="margin-top:12px;${off?'border-color:var(--urgent);background:var(--urgent-bg);':''}">
+    <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:${off?'var(--urgent)':'var(--text-muted)'};">CASH CHECK (ONLY YOU SEE THIS)</p>
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin:3px 0;"><span style="color:var(--text-muted);">Expected in drawer</span><span>${peso(c.expected)}</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin:3px 0;"><span style="color:var(--text-muted);">Counted at closing</span><span>${peso(c.counted)}</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin:8px 0 0;padding-top:8px;border-top:1px solid var(--border);"><span>Result</span><span style="color:${off?'var(--urgent)':'var(--accent)'};">${word}</span></div>
+    <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Expected = morning cash funds + cash sales tally − expenses paid from the drawer.</p>
+  </div>`;
+}
+function openTallyModal(){
+  if(!isSalesReportEditable(ui.salesReportDate)) return;
+  ui.modal = {type:'tally-cash'}; render();
+}
+function renderTallyModal(){
+  const r = ensureSalesReport(ui.salesReportDate);
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Cash sales (your tally)</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">Enter the total cash sales for the day from your receipts or tally.</p>
+      <div class="field"><label>Amount in pesos</label><input id="tally-amount" type="number" min="0" step="0.01" value="${r.tallyCash!=null?r.tallyCash:''}" placeholder="0.00" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveTally()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveTally(){
+  if(!isSalesReportEditable(ui.salesReportDate)) return;
+  const v = parseFloat(document.getElementById('tally-amount').value);
+  if(isNaN(v) || v<0){ showToast('Enter the cash sales total'); return; }
+  const r = ensureSalesReport(ui.salesReportDate);
+  r.tallyCash = Math.round(v*100)/100;
+  persist(['salesReports']);
+  closeModal();
+}
 function openSalesDownloadModal(){
   const date = ui.salesReportDate || dateStr(new Date());
   ui.modal = {type:'sales-download-form', from: addDays(date, -6), to: date};
@@ -3741,11 +4057,12 @@ function downloadSalesReportRangeCSV(){
   reports.forEach(r=>{
     const cashSales = cashSalesOf(r);
     const total = cashSales + onlineSalesTotal(r);
-    rows.push([r.date, r.cashFunds||0, cashDrawerTotal(r), expensesTotal(r), onlineSalesTotal(r), cashSales, total]);
+    const cc = cashCheckOf(r);
+    rows.push([r.date, r.cashFunds||0, cashDrawerTotal(r), expensesTotal(r), onlineSalesTotal(r), cashSales, total, r.tallyCash!=null?r.tallyCash:'', cc?cc.expected:'', cc?cc.diff:'']);
     gCashFunds += r.cashFunds||0; gDrawer += cashDrawerTotal(r); gExpenses += expensesTotal(r); gOnline += onlineSalesTotal(r); gCashSales += cashSales; gTotal += total;
   });
-  rows.push(['TOTAL', gCashFunds, gDrawer, gExpenses, gOnline, gCashSales, gTotal]);
-  downloadCSV(`sales-report-${from}_to_${to}.csv`, ['Date','Cash Funds','Cash Drawer Total','Expenses Total','Online Sales Total','Cash Sales','Total Sales'], rows);
+  rows.push(['TOTAL', gCashFunds, gDrawer, gExpenses, gOnline, gCashSales, gTotal, '', '', '']);
+  downloadCSV(`sales-report-${from}_to_${to}.csv`, ['Date','Cash Funds','Cash Drawer Total','Expenses Total','Online Sales Total','Cash Sales','Total Sales','Cash sales tally','Expected in drawer','Difference (counted - expected)'], rows);
   closeModal();
 }
 
@@ -3835,7 +4152,7 @@ function renderExpenseEditModal(){
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
     <div class="modal-sheet">
       <p class="modal-title">Edit expense</p>
-      ${fromDl?`<p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">This came from a delivery. You can change the category here. To change the amount, a manager can edit the delivery.</p>`:''}
+      ${fromDl?`<p style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">This came from a delivery. You can change the category here. To change the amount, a Team Leader can edit the delivery.</p>`:''}
       <div class="field"><label>What was it for?</label><input id="exe-desc" value="${escHtml(e.desc)}" ${fromDl?'disabled':''} /></div>
       <div class="field"><label>Category</label><select id="exe-cat">${opts}</select></div>
       <div class="field"><label>Amount</label><input id="exe-amount" type="number" step="0.01" value="${e.amount}" ${fromDl?'disabled':''} /></div>
@@ -4841,7 +5158,7 @@ function saveDelivery(){
   DB.deliveries.unshift(delivery);
   const exRes = syncDeliveryExpense(delivery);
   persist(['items','deliveries']);
-  ui.deliveryNote = exRes==='ok' ? 'Added to today\'s Daily Expenses.' : exRes==='locked' ? 'Today\'s sales report is already submitted, so the expense was not added. Ask the owner to unlock it, then a manager can re-save this delivery.' : '';
+  ui.deliveryNote = exRes==='ok' ? 'Added to today\'s Daily Expenses.' : exRes==='locked' ? 'Today\'s sales report is already submitted, so the expense was not added. Ask the owner to unlock it, then a Team Leader can re-save this delivery.' : '';
   logActivity(`received a delivery from ${supplierLabel} (${lines.length} item${lines.length===1?'':'s'})`);
   ui.deliveryDone = delivery.id;
   ui.recvDraft = null;
@@ -4857,7 +5174,7 @@ function renderDeliverySaved(){
     ${d ? `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${escHtml(d.supplier)}${d.receipt?' · '+escHtml(d.receipt):''}</p>
     <div class="card" style="padding:6px 16px;">${rows}</div>
     ${ui.deliveryNote?`<p style="font-size:12px;text-align:center;margin-top:10px;font-weight:600;">${escHtml(ui.deliveryNote)}</p>`:''}
-    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Counts are updated. If an amount is wrong, ask a manager or the owner to correct it.</p>` : '<div class="empty-note">This delivery is no longer available.</div>'}
+    <p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Counts are updated. If an amount is wrong, ask a Team Leader or the owner to correct it.</p>` : '<div class="empty-note">This delivery is no longer available.</div>'}
     <button class="btn" style="margin-top:14px;" onclick="backToMain()">Done</button>
   </div>`;
 }

@@ -263,6 +263,7 @@ async function init(){
   DB.menu = await loadShared('inv_menu', []);
   trimOldAttendance();
   trimOldAttendancePhotos();
+  stripItemPhotos();
   trimOldNotes();
   trimOldSalesReports();
   trimOldChecklistRuns();
@@ -759,6 +760,11 @@ function trimOldAttendance(){
   const before = DB.attendance.length;
   DB.attendance = DB.attendance.filter(a=>a.ts >= cutoff);
   if(DB.attendance.length !== before) persist(['attendance']);
+}
+function stripItemPhotos(){
+  let changed = false;
+  DB.items.forEach(i=>{ if(i.photo){ i.photo = null; changed = true; } });
+  if(changed) persist(['items']);
 }
 function trimOldAttendancePhotos(){
   const cutoff = Date.now() - ATTENDANCE_PHOTO_RETENTION_MS;
@@ -3368,11 +3374,7 @@ function renderItemFormModal(){
       <div class="field"><label>What are you adding?</label><input id="it-name" value="${d.name}" placeholder="e.g. Ground beef" /></div>
       <div class="field"><label>Where does it belong?</label><select onchange="onCategorySelectChange(this.value)">${catOptions}</select></div>
       <div class="field"><label>Location</label><select onchange="onSubSelectChange(this.value)">${subOptions}</select></div>
-      <div class="field"><label>Item photo &amp; brand</label>
-        <div class="photo-row">
-          ${photoBlock}
-          <button type="button" class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="document.getElementById('hidden-photo-input').click()">Upload photo</button>
-        </div>
+      <div class="field"><label>Brand (optional)</label>
         <input id="it-brand" value="${d.brand}" placeholder="Brand (optional)" />
       </div>
       <div class="field"><label>Supplier (optional)</label><input id="it-supplier" list="supplier-list" value="${escHtml(d.supplier||'')}" placeholder="e.g. Manila Meat Traders" autocomplete="off" /><datalist id="supplier-list">${supplierOptionsHtml()}</datalist></div>

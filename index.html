@@ -1935,7 +1935,7 @@ function renderAuth(){
       <button class="btn" type="submit">Sign in</button>
       </form>
       <p class="switch-line">New here? <button class="link-btn" onclick="ui.authMode='register';render();">Create an account</button></p>
-      ${!hasUsers ? `<p class="switch-line">Just exploring? <button class="link-btn" onclick="viewDemo('owner')">View as owner</button> · <button class="link-btn" onclick="viewDemo('staff')">View as staff</button></p>` : ''}
+      ${(!hasUsers && location.hash==='#demo') ? `<p class="switch-line">Just exploring? <button class="link-btn" onclick="viewDemo('owner')">View as owner</button> · <button class="link-btn" onclick="viewDemo('staff')">View as staff</button></p>` : ''}
     </div>`;
   }
   return `

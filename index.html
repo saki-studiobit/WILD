@@ -1918,6 +1918,7 @@ function renderRecoveryModal(){
   </div>`;
 }
 function renderAuth(){
+  if(ui.authMode==='forgot') return renderForgot();
   const hasUsers = DB.users.length>0;
   if(ui.authMode==='login'){
     return `
@@ -1934,6 +1935,7 @@ function renderAuth(){
       <p class="error-text" id="auth-error"></p>
       <button class="btn" type="submit">Sign in</button>
       </form>
+      <p class="switch-line"><button class="link-btn" onclick="ui.authMode='forgot';render();">Forgot password?</button></p>
       <p class="switch-line">New here? <button class="link-btn" onclick="ui.authMode='register';render();">Create an account</button></p>
       ${(!hasUsers && location.hash==='#demo') ? `<p class="switch-line">Just exploring? <button class="link-btn" onclick="viewDemo('owner')">View as owner</button> · <button class="link-btn" onclick="viewDemo('staff')">View as staff</button></p>` : ''}
     </div>`;
@@ -2981,6 +2983,7 @@ function renderProfile(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSalesTrendsScreen()">Sales trends</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageTrendsScreen()">Wastage trends</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openOrderTemplate()">Order message wording</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="makeRecoveryCode()">Create password recovery code</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openActivityScreen()">Activity log</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageLogScreen()">Wastage log</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSecurityLogScreen()">Security log</button>

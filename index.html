@@ -976,34 +976,77 @@ function setItemQtyDirect(itemId, value){
   render();
 }
 function escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function setItemOpened(itemId, field, value){
+function openedLinesOf(i){
+  if(Array.isArray(i.opened)) return i.opened;
+  const q = i.openedQty||0, n = i.openedNote||'';
+  if(!q && !n && !i.openedLocId) return [];
+  return [{id:'legacy', qty:q, note:n, locId:i.openedLocId||'', subId:i.openedSubId||''}];
+}
+function ensureOpened(i){
+  if(!Array.isArray(i.opened)){
+    i.opened = openedLinesOf(i).map(l=>Object.assign({}, l, {id:uid('op')}));
+    delete i.openedQty; delete i.openedNote; delete i.openedLocId; delete i.openedSubId;
+  }
+  return i.opened;
+}
+function stampOpened(item){ item.openedBy = currentUser().name; item.openedAt = Date.now(); }
+function addOpenedLine(itemId){
   const item = DB.items.find(i=>i.id===itemId);
   if(!item) return;
-  if(field==='qty'){
-    const v = parseFloat(value);
-    item.openedQty = isNaN(v) ? 0 : Math.max(0, Math.round(v*100)/100);
-  } else {
-    item.openedNote = String(value||'').trim().slice(0,60);
-  }
-  item.openedBy = currentUser().name;
-  item.openedAt = Date.now();
+  ensureOpened(item).push({id:uid('op'), qty:1, note:'', locId:'', subId:''});
+  stampOpened(item); render();
 }
-function openedTag(i){
-  if(!i.trackOpened) return '';
-  const q = i.openedQty||0, note = i.openedNote||'';
-  if(!q && !note) return '';
-  return ' · ' + q + ' opened' + (note ? ' (' + escHtml(note) + ')' : '');
+function removeOpenedLine(itemId, lineId){
+  const item = DB.items.find(i=>i.id===itemId);
+  if(!item) return;
+  item.opened = ensureOpened(item).filter(l=>l.id!==lineId);
+  stampOpened(item); render();
+}
+function setOpenedLine(itemId, lineId, field, value){
+  const item = DB.items.find(i=>i.id===itemId);
+  if(!item) return;
+  const l = ensureOpened(item).find(x=>x.id===lineId);
+  if(!l) return;
+  if(field==='qty'){ const v = parseFloat(value); l.qty = isNaN(v) ? 0 : Math.max(0, Math.round(v*100)/100); }
+  else if(field==='loc'){ const lv = String(value||'').split('|'); l.locId = lv[0]||''; l.subId = lv[1]||''; }
+  else l.note = String(value||'').trim().slice(0,60);
+  stampOpened(item);
+}
+function openedLineLoc(l){
+  if(!l.locId) return '';
+  const loc = DB.locations.find(x=>x.id===l.locId);
+  if(!loc) return '';
+  const sb = l.subId ? (loc.subs||[]).find(x=>x.id===l.subId) : null;
+  return sb ? loc.name+' · '+sb.name : loc.name;
 }
 function groupOpenedTag(items){
-  const opened = items.filter(i=>i.trackOpened && ((i.openedQty||0) || i.openedNote));
-  if(!opened.length) return '';
-  const q = Math.round(opened.reduce((s,i)=>s+(i.openedQty||0),0)*100)/100;
-  const notes = opened.map(i=>i.openedNote).filter(Boolean).map(escHtml);
-  return ' · ' + q + ' opened' + (notes.length ? ' (' + notes.join(', ') + ')' : '');
+  const lines = [];
+  items.forEach(i=>{ if(i.trackOpened) openedLinesOf(i).forEach(l=>{ if((l.qty||0) || l.note) lines.push(l); }); });
+  if(!lines.length) return '';
+  const q = Math.round(lines.reduce((s,l)=>s+(l.qty||0),0)*100)/100;
+  const notes = lines.map(l=>l.note).filter(Boolean).map(escHtml);
+  const locs = [...new Set(lines.map(openedLineLoc).filter(Boolean))].map(escHtml);
+  return ' · ' + q + ' opened' + (notes.length ? ' (' + notes.join(', ') + ')' : '') + (locs.length ? ' 📍 ' + locs.join(', ') : '');
+}
+function openedTag(i){ return i.trackOpened ? groupOpenedTag([i]) : ''; }
+function openedLinesHtml(item){
+  const locOpts = sel => DB.locations.map(l=>`<optgroup label="${escHtml(l.name)}"><option value="${l.id}|" ${sel.locId===l.id&&!sel.subId?'selected':''}>${escHtml(l.name)} (general)</option>${(l.subs||[]).map(sb=>`<option value="${l.id}|${sb.id}" ${sel.locId===l.id&&sel.subId===sb.id?'selected':''}>${escHtml(l.name)} · ${escHtml(sb.name)}</option>`).join('')}</optgroup>`).join('');
+  const fld = 'border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);';
+  const rows = openedLinesOf(item).map(l=>`
+    <div style="padding:10px 0;border-top:1px solid var(--border);">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="number" min="0" step="1" value="${l.qty||''}" placeholder="0" style="width:64px;text-align:center;${fld}padding:8px 4px;" onchange="setOpenedLine('${item.id}','${l.id}','qty',this.value)" />
+        <input type="text" maxlength="60" value="${escHtml(l.note)}" placeholder="How much is left, e.g. 600 g" style="flex:1;min-width:0;${fld}" onchange="setOpenedLine('${item.id}','${l.id}','note',this.value)" />
+        <button type="button" aria-label="Remove" onclick="removeOpenedLine('${item.id}','${l.id}')" style="background:none;border:none;font-size:20px;color:var(--text-muted);padding:4px 6px;cursor:pointer;">×</button>
+      </div>
+      <select style="width:100%;margin-top:6px;font-size:14px;${fld}" onchange="setOpenedLine('${item.id}','${l.id}','loc',this.value)"><option value="">Where is it? (same as item)</option>${locOpts(l)}</select>
+    </div>`).join('');
+  return rows;
 }
 function commitItemQty(itemId){
   const item = DB.items.find(i=>i.id===itemId);
   if(!item) return;
+  item.updatedBy = currentUser().name; item.updatedAt = Date.now();
   persist(['items']);
   logActivity(`updated ${item.name} to ${item.qty} ${item.unit}`);
   closeModal();
@@ -1089,6 +1132,7 @@ function saveNewOrEditedItem(){
     const item = DB.items.find(i=>i.id===ui.modal.itemId);
     Object.assign(item, {name, brand:d.brand.trim(), supplier:canonicalSupplier(d.supplier), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, photo:d.photo, usage:d.usage.trim(), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub});
     if(isMgr(u)){ item.low = d.low; item.urgent = d.urgent; item.pinned = d.pinned; item.freshProduce = d.freshProduce; item.trackOpened = d.trackOpened; }
+    item.updatedBy = u.name; item.updatedAt = Date.now();
     logActivity(`edited item ${name}`);
   } else {
     DB.items.push({id:uid('it'), locId:ui.modal.selectedCat, subId:ui.modal.selectedSub, name, brand:d.brand.trim(), supplier:canonicalSupplier(d.supplier), supplierPhone:d.supplierPhone.trim(), supplierNote:d.supplierNote.trim(), photo:d.photo, usage:d.usage.trim(), unit:d.unit.trim()||'pcs', qty:d.qty, low:isMgr(u)?d.low:0, urgent:isMgr(u)?d.urgent:0, pinned:isMgr(u)?d.pinned:false, freshProduce:isMgr(u)?d.freshProduce:false, trackOpened:isMgr(u)?d.trackOpened:false});
@@ -3722,12 +3766,9 @@ function renderItemQtyModal(){
 
   const openedBlock = item.trackOpened ? `
     <div class="card" style="margin:14px 0 0;padding:12px 14px;">
-      <p style="font-size:13px;font-weight:600;margin:0 0 8px;">Opened</p>
-      <div style="display:flex;gap:8px;">
-        <input type="number" min="0" step="1" value="${item.openedQty||''}" placeholder="0" style="width:72px;text-align:center;border:1px solid var(--border);border-radius:10px;padding:8px 4px;background:var(--surface);" onchange="setItemOpened('${item.id}','qty',this.value)" />
-        <input type="text" maxlength="60" value="${escHtml(item.openedNote)}" placeholder="How much is left, e.g. half brick" style="flex:1;min-width:0;border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);" onchange="setItemOpened('${item.id}','note',this.value)" />
-      </div>
-      <p style="font-size:11px;color:var(--text-muted);margin:6px 0 0;">Number of opened ${item.unit} and how much is left. Doesn't change the count above.${item.openedBy?` Last updated by ${escHtml(item.openedBy)}.`:''}</p>
+      <p style="font-size:13px;font-weight:600;margin:0 0 4px;">Opened</p>
+      ${openedLinesHtml(item)}
+      <button type="button" class="btn btn-secondary" style="width:auto;padding:7px 12px;font-size:12px;margin-top:8px;" onclick="addOpenedLine('${item.id}')">+ Add opened location</button>
     </div>` : '';
 
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
@@ -3744,6 +3785,7 @@ function renderItemQtyModal(){
       <p style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:-8px;">${item.unit}</p>
       ${freshCheckBlock}
       ${openedBlock}
+      ${item.updatedBy ? `<p style="font-size:12px;color:var(--text-muted);text-align:center;margin:12px 0 0;">Last updated by ${escHtml(item.updatedBy)}${item.updatedAt ? ' · '+new Date(item.updatedAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</p>` : ''}
       <div class="modal-row-actions">
         <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn" onclick="commitItemQty('${item.id}')">Save count</button>

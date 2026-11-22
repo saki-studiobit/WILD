@@ -261,6 +261,8 @@ async function init(){
   DB.deliveries = await loadShared('inv_deliveries', []);
   DB.pay = payInit(await loadShared('inv_pay', null));
   DB.menu = await loadShared('inv_menu', []);
+  DB.prep = prepInit(await loadShared('inv_prep', null));
+  trimOldPrep();
   trimOldAttendance();
   trimOldAttendancePhotos();
   stripItemPhotos();
@@ -297,6 +299,7 @@ function persist(keys){
   if(keys.includes('shoppingMarks')) saveShared('inv_shoppingmarks', DB.shoppingMarks);
   if(keys.includes('freshProduceChecks')) saveShared('inv_freshproducechecks', DB.freshProduceChecks);
   if(keys.includes('deliveries')) saveShared('inv_deliveries', DB.deliveries);
+  if(keys.includes('prep')) saveShared('inv_prep', DB.prep);
   if(keys.includes('pay')) saveShared('inv_pay', DB.pay);
   if(keys.includes('menu')) saveShared('inv_menu', DB.menu);
 }
@@ -464,7 +467,17 @@ async function seedDemoData(){
   DB.recipes.push({id:uid('rc'), name:'Beef burger', category:'Food', ingredients:['150g ground beef','1 burger bun','1 slice cheese'], instructions:'Grill the patty 4 minutes per side.\nToast the bun.\nAssemble and serve warm.'});
   DB.recipes.push({id:uid('rc'), name:'Grilled chicken plate', category:'Food', ingredients:['250g chicken breast','Side of rice','Side salad'], instructions:'Grill chicken breast until cooked through.\nPlate with rice and salad.'});
   logActivity('Demo data loaded');
-  persist(['users','items','recipes']);
+  const dd = n=>dateStr(new Date(Date.now()-n*86400000));
+  const du = n=>dateStr(new Date(Date.now()+n*86400000));
+  DB.prep = {items:[
+    {id:uid('pp'), name:'Mayonnaise', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:3000, left:1850, useBy:du(5), notes:'Batch 2, new eggs', by:'Jon Cruz', ts:Date.now()}]},
+    {id:uid('pp'), name:'Garlic aioli', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(2), grams:2000, left:320, useBy:du(2), notes:'', by:'Jon Cruz', ts:Date.now()-2*86400000}]},
+    {id:uid('pp'), name:'Pizza dough', low:1500, locId:kitchen.id, subId:kitchen.subs[1].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:6000, left:4200, useBy:du(2), notes:'', by:'Ana Reyes', ts:Date.now()}]},
+    {id:uid('pp'), name:'Caramel sauce', low:400, locId:bar.id, subId:bar.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(3), grams:1500, left:900, useBy:du(10), notes:'', by:'Jon Cruz', ts:Date.now()-3*86400000}]}
+  ], requests:[], counts:[]};
+  DB.prep.requests.push({id:uid('pr'), itemId:DB.prep.items[3].id, by:'Maria', byId:'x', ts:Date.now()-3600000, status:'requested'});
+  DB.prep.requests.push({id:uid('pr'), itemId:DB.prep.items[2].id, by:'Ana Reyes', byId:'x', ts:Date.now()-1800000, status:'making', takenBy:'Jon Cruz', takenTs:Date.now()-1200000});
+  persist(['users','items','recipes','prep']);
 }
 
 function payInit(p){
@@ -1753,6 +1766,391 @@ function removeUser(userId){
 
 /* ---------- rendering ---------- */
 const RECIPES_TAB_ENABLED = false;
+/* ================= In-house prep ================= */
+function prepInit(d){
+  d = d || {};
+  return {items: d.items||[], requests: d.requests||[], counts: d.counts||[]};
+}
+function tabHiddenFor(tab, u){
+  if(isOwner(u)) return false;
+  return tab==='menu' ? !!DB.settings.hideMenuTab : (tab==='prep' ? !!DB.settings.hidePrepTab : false);
+}
+function toggleTabHidden(tab){
+  if(!isOwner(currentUser())) return;
+  const k = tab==='menu' ? 'hideMenuTab' : 'hidePrepTab';
+  DB.settings[k] = !DB.settings[k];
+  persist(['settings']);
+  render();
+}
+function trimOldPrep(){
+  const now = Date.now(), day = 86400000;
+  let ch = false;
+  const c0 = DB.prep.counts.length, r0 = DB.prep.requests.length;
+  DB.prep.counts = DB.prep.counts.filter(c=>c.ts >= now-30*day);
+  DB.prep.requests = DB.prep.requests.filter(r=>r.ts >= now-7*day);
+  DB.prep.items.forEach(it=>{
+    const n = it.batches.length;
+    it.batches = it.batches.filter(b=>b.left>0 || (b.zeroTs||now) >= now-14*day);
+    if(it.batches.length!==n) ch = true;
+  });
+  if(ch || DB.prep.counts.length!==c0 || DB.prep.requests.length!==r0) persist(['prep']);
+}
+function prepLocLabel(it){
+  if(!it.locId) return '';
+  const l = DB.locations.find(x=>x.id===it.locId);
+  if(!l) return '';
+  const sub = it.subId ? (l.subs||[]).find(x=>x.id===it.subId) : null;
+  return sub ? `${l.name} · ${sub.name}` : l.name;
+}
+function setPrepLoc(v){ ui.prepLoc = v; render(); }
+function gfmt(n){ return Math.round(n).toLocaleString()+' g'; }
+function prepDateFmt(d){ return d ? new Date(d+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) : ''; }
+function prepTotal(it){ return it.batches.reduce((a,b)=>a+(b.spoiled?0:(b.left||0)),0); }
+function prepCheckToday(it){
+  const c = it.check;
+  if(!c) return null;
+  if(c.state==='spoiled') return c;
+  return c.date===dateStr(new Date()) ? c : null;
+}
+function applyPrepCheck(it, state){
+  const u = currentUser();
+  const prev = it.check && it.check.state;
+  if(!state){
+    if(prev==='spoiled'){
+      it.batches.forEach(b=>{ delete b.spoiled; });
+      DB.prep.requests = DB.prep.requests.filter(r=>!(r.itemId===it.id && r.reason==='spoiled' && r.status==='requested'));
+    }
+    delete it.check; return;
+  }
+  it.check = {state, by:u.name, ts:Date.now(), date:dateStr(new Date())};
+  if(state==='spoiled'){
+    it.batches.forEach(b=>{ if(b.left>0) b.spoiled = true; });
+    if(!prepOpenReq(it.id)) DB.prep.requests.push({id:uid('pr'), itemId:it.id, by:u.name, byId:u.id, ts:Date.now(), status:'requested', reason:'spoiled'});
+  } else {
+    if(prev==='spoiled'){
+      it.batches.forEach(b=>{ delete b.spoiled; });
+      DB.prep.requests = DB.prep.requests.filter(r=>!(r.itemId===it.id && r.reason==='spoiled' && r.status==='requested'));
+    }
+  }
+}
+function setPrepCheck(itemId, state){
+  const it = DB.prep.items.find(x=>x.id===itemId);
+  if(!it) return;
+  const cur = prepCheckToday(it);
+  const next = (cur && cur.state===state) ? null : state;
+  applyPrepCheck(it, next);
+  persist(['prep']);
+  if(next==='spoiled') logActivity(`marked ${it.name} as spoiled, new batch needed`);
+  else if(next==='good') logActivity(`tasted ${it.name}, in good condition`);
+  render();
+}
+function prepOpenReq(itemId){ return DB.prep.requests.find(r=>r.itemId===itemId); }
+function prepIsLow(it){ return it.low>0 && prepTotal(it)<=it.low; }
+function prepExpiry(it){
+  const today = dateStr(new Date());
+  let best = null;
+  it.batches.forEach(b=>{
+    if(b.left>0 && !b.spoiled && b.useBy){
+      const days = Math.round((new Date(b.useBy+'T00:00:00') - new Date(today+'T00:00:00'))/86400000);
+      if(best===null || days<best) best = days;
+    }
+  });
+  return best;
+}
+function prepNeeds(){
+  return DB.prep.items.filter(it=> prepIsLow(it) || prepOpenReq(it.id));
+}
+function prepStatusPill(it){
+  const r = prepOpenReq(it.id);
+  if(it.check && it.check.state==='spoiled' && !(r && r.status==='making')) return `<span class="badge badge-urgent">Spoiled</span>`;
+  if(r && r.status==='making') return `<span class="badge" style="background:var(--accent-light);color:var(--accent);">In progress</span>`;
+  if(r) return `<span class="badge" style="background:var(--low-bg);color:var(--low);">Requested</span>`;
+  if(prepIsLow(it)) return `<span class="badge badge-urgent">Low</span>`;
+  return '';
+}
+function prepNeedsHtml(u){
+  if(!DB.prep || tabHiddenFor('prep', u)) return '';
+  const list = prepNeeds();
+  if(!list.length) return '';
+  const rows = list.map(it=>{
+    const r = prepOpenReq(it.id);
+    const tot = prepTotal(it);
+    let sub = prepIsLow(it) ? `${gfmt(tot)} left · low at ${gfmt(it.low)}` : `${gfmt(tot)} left`;
+    const locTxt = prepLocLabel(it);
+    if(r && r.reason==='spoiled' && r.status!=='making') sub = `Spoiled, new batch needed · reported by ${escHtml(r.by)}`;
+    else if(r) sub = r.status==='making' ? `${escHtml(r.takenBy)} is making it${r.takenTs?' · started '+new Date(r.takenTs).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}` : `Requested by ${escHtml(r.by)} · ${new Date(r.ts).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`;
+    const btn = (r && r.status==='making')
+      ? `<button class="btn btn-secondary" style="width:auto;padding:7px 12px;font-size:12px;margin-top:8px;" onclick="finishPrep('${it.id}')">Done, add batch</button>`
+      : `<button class="btn" style="width:auto;padding:7px 12px;font-size:12px;margin-top:8px;" onclick="takePrep('${it.id}')">I'll make it</button>`;
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div style="min-width:0;cursor:pointer;" onclick="openPrepDetail('${it.id}')"><p style="font-size:14px;font-weight:600;margin:0;">${escHtml(it.name)}</p>${locTxt?`<p style="font-size:11px;color:var(--accent);margin:2px 0 0;">📍 ${escHtml(locTxt)}</p>`:''}<p style="font-size:12px;color:var(--text-muted);margin:2px 0 0;">${sub}</p></div>${prepStatusPill(it)}</div>${btn}</div>`;
+  }).join('');
+  return `<p class="section-title">Needs prep</p><div class="card" style="padding:4px 16px;margin-bottom:14px;">${rows}</div>`;
+}
+function takePrep(itemId){
+  const u = currentUser();
+  let r = prepOpenReq(itemId);
+  if(!r){ r = {id:uid('pr'), itemId, by:u.name, byId:u.id, ts:Date.now(), status:'making'}; DB.prep.requests.push(r); }
+  r.status = 'making'; r.takenBy = u.name; r.takenById = u.id; r.takenTs = Date.now();
+  const it = DB.prep.items.find(x=>x.id===itemId);
+  persist(['prep']);
+  logActivity(`is making ${it?it.name:'a prep item'}`);
+  render();
+}
+function requestPrep(itemId){
+  const u = currentUser();
+  if(prepOpenReq(itemId)){ showToast('Already requested'); return; }
+  DB.prep.requests.push({id:uid('pr'), itemId, by:u.name, byId:u.id, ts:Date.now(), status:'requested'});
+  const it = DB.prep.items.find(x=>x.id===itemId);
+  persist(['prep']);
+  logActivity(`requested prep for ${it?it.name:'an item'}`);
+  showToast('Prep requested. It is now on Home for everyone.');
+  ui.modal = null; render();
+}
+function cancelPrepRequest(itemId){
+  if(!isMgr(currentUser())) return;
+  DB.prep.requests = DB.prep.requests.filter(r=>r.itemId!==itemId);
+  persist(['prep']); ui.modal=null; render();
+}
+function finishPrep(itemId){ openPrepBatchModal(itemId, true); }
+
+function renderPrep(){
+  const u = currentUser();
+  const needs = prepNeeds().length;
+  const usedLocs = DB.locations.filter(l=>DB.prep.items.some(i=>i.locId===l.id));
+  if(ui.prepLoc && ui.prepLoc!=='all' && ui.prepLoc!=='none' && !usedLocs.some(l=>l.id===ui.prepLoc)) ui.prepLoc = 'all';
+  const hasNoLoc = DB.prep.items.some(i=>!i.locId);
+  const chipsHtml = usedLocs.length ? `<div class="chip-row" style="margin-bottom:10px;"><div class="chip ${(ui.prepLoc||'all')==='all'?'active':''}" onclick="setPrepLoc('all')">All</div>${usedLocs.map(l=>`<div class="chip ${ui.prepLoc===l.id?'active':''}" onclick="setPrepLoc('${l.id}')">${escHtml(l.name)}</div>`).join('')}${hasNoLoc?`<div class="chip ${ui.prepLoc==='none'?'active':''}" onclick="setPrepLoc('none')">No location</div>`:''}</div>` : '';
+  const shownItems = DB.prep.items.filter(i=> !ui.prepLoc || ui.prepLoc==='all' || (ui.prepLoc==='none' ? !i.locId : i.locId===ui.prepLoc));
+  const rows = DB.prep.items.length ? shownItems.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(it=>{
+    const tot = prepTotal(it);
+    const exp = prepExpiry(it);
+    const pct = it.low>0 ? Math.min(100, Math.round(tot/(it.low*3)*100)) : (tot>0?100:0);
+    const color = prepIsLow(it) ? 'var(--urgent)' : 'var(--ok, #2F8F4E)';
+    const newest = it.batches.filter(b=>b.left>0 && !b.spoiled).sort((a,b)=>b.madeOn.localeCompare(a.madeOn))[0];
+    const meta = newest ? `Made ${prepDateFmt(newest.madeOn)}${newest.by?' by '+escHtml(newest.by.split(' ')[0]):''}${exp!==null ? ' · '+(exp<0?'<strong style="color:var(--urgent);">expired</strong>':exp===0?'use today':'use by in '+exp+' day'+(exp===1?'':'s')) : ''}` : 'No batch yet';
+    const tags = [];
+    if(exp!==null && exp<=2) tags.push(`<span class="badge badge-urgent">${exp<0?'Expired':exp===0?'Use today':'Expires in '+exp+' day'+(exp===1?'':'s')}</span>`);
+    const sp = prepStatusPill(it); if(sp) tags.push(sp);
+    const chk = prepCheckToday(it);
+    if(chk && chk.state==='good') tags.push(`<span class="badge" style="background:var(--accent-light);color:var(--accent);">✓ Tasted today</span>`);
+    return `<div class="card" style="cursor:pointer;margin-bottom:8px;" onclick="openPrepDetail('${it.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="min-width:0;"><p style="font-size:14px;font-weight:600;margin:0;">${escHtml(it.name)}</p>${prepLocLabel(it)?`<p style="font-size:11px;color:var(--accent);margin:2px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${meta}</p></div><div style="text-align:right;"><p style="font-size:18px;font-weight:600;margin:0;">${gfmt(tot)}</p></div></div>
+      <div style="height:6px;border-radius:3px;background:var(--border);margin-top:8px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${color};"></div></div>
+      ${tags.length?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${tags.join('')}</div>`:''}
+    </div>`;
+  }).join('') : `<div class="empty-note">${isMgr(u) ? 'No prep items yet. Add your first one, like mayonnaise or pizza dough.' : 'No prep items yet. Ask the owner or a Team Leader to add them.'}</div>`;
+  return `
+  <header class="topbar"><div><p class="greet">In-house prep</p><p class="greet-sub">${needs ? needs+' need'+(needs===1?'s':'')+' prep' : 'Everything is stocked'}</p></div></header>
+  <div class="screen" style="padding-top:0;">
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button class="btn" style="flex:1;" onclick="openPrepCountModal()" ${DB.prep.items.length?'':'disabled'}>Daily count</button>
+      <button class="btn btn-secondary" style="flex:1;" onclick="openPrepBatchModal(null,false)" ${DB.prep.items.length?'':'disabled'}>+ New batch</button>
+    </div>
+    ${isMgr(u) ? `<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="openPrepItemModal(null)">+ Add prep item</button>` : ''}
+    ${chipsHtml}
+    ${rows || '<div class="empty-note">Nothing here.</div>'}
+  </div>`;
+}
+
+function openPrepItemModal(id){
+  if(!isMgr(currentUser())) return;
+  const it = id ? DB.prep.items.find(x=>x.id===id) : null;
+  ui.modal = {type:'prep-item', id, name: it?it.name:'', low: it?(it.low||''):'', loc: (it&&it.locId) ? it.locId+'|'+(it.subId||'') : ''};
+  render();
+}
+function renderPrepItemModal(){
+  const m = ui.modal;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet">
+    <p class="modal-title">${m.id?'Edit prep item':'New prep item'}</p>
+    <div class="field"><label>Name</label><input id="pi-name" value="${escHtml(m.name)}" placeholder="e.g. Mayonnaise" /></div>
+    <div class="field"><label>Where is it kept (optional)</label><select id="pi-loc"><option value="">Not set</option>${DB.locations.map(l=>`<optgroup label="${escHtml(l.name)}"><option value="${l.id}|" ${m.loc===l.id+'|'?'selected':''}>${escHtml(l.name)} (general)</option>${(l.subs||[]).map(sb=>`<option value="${l.id}|${sb.id}" ${m.loc===l.id+'|'+sb.id?'selected':''}>${escHtml(l.name)} · ${escHtml(sb.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+    <div class="field"><label>Low at (grams, optional)</label><input id="pi-low" type="number" inputmode="numeric" min="0" value="${escHtml(String(m.low))}" placeholder="e.g. 500" /></div>
+    <p style="font-size:11px;color:var(--text-muted);margin:-6px 0 12px;">When the grams left drop to this amount, it shows under Needs prep on Home.</p>
+    <div class="modal-row-actions">
+      ${m.id?`<button type="button" class="btn btn-secondary" style="color:var(--urgent);" onclick="deletePrepItem('${m.id}')">Delete</button>`:`<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>`}
+      <button type="button" class="btn" onclick="savePrepItem()">Save</button>
+    </div></div></div>`;
+}
+function savePrepItem(){
+  const name = document.getElementById('pi-name').value.trim();
+  const low = parseFloat(document.getElementById('pi-low').value) || 0;
+  if(!name){ showToast('Enter a name'); return; }
+  const id = ui.modal.id;
+  const lv = document.getElementById('pi-loc').value.split('|');
+  const locId = lv[0] || '', subId = lv[1] || '';
+  if(id){ const it = DB.prep.items.find(x=>x.id===id); it.name = name; it.low = low; it.locId = locId; it.subId = subId; }
+  else {
+    if(DB.prep.items.some(x=>x.name.toLowerCase()===name.toLowerCase())){ showToast('That prep item already exists'); return; }
+    DB.prep.items.push({id:uid('pp'), name, low, locId, subId, batches:[]});
+  }
+  persist(['prep']); logActivity(`${id?'edited':'added'} prep item ${name}`);
+  ui.modal = null; render();
+}
+function deletePrepItem(id){
+  const it = DB.prep.items.find(x=>x.id===id);
+  if(!it) return;
+  ui.modal = {type:'prep-delete', id, name:it.name};
+  render();
+}
+function renderPrepDeleteConfirm(){
+  return `<div class="modal-overlay"><div class="modal-sheet"><p class="modal-title">Delete ${escHtml(ui.modal.name)}?</p><p style="font-size:13px;color:var(--text-muted);margin:0 0 14px;">Its batches and requests are removed too.</p><div class="modal-row-actions"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" style="background:var(--urgent);" onclick="confirmDeletePrepItem()">Delete</button></div></div></div>`;
+}
+function confirmDeletePrepItem(){
+  const id = ui.modal.id;
+  DB.prep.items = DB.prep.items.filter(x=>x.id!==id);
+  DB.prep.requests = DB.prep.requests.filter(r=>r.itemId!==id);
+  DB.prep.counts = DB.prep.counts.filter(c=>c.itemId!==id);
+  persist(['prep']); ui.modal=null; render();
+}
+
+function prepQualityHtml(it){
+  const chk = prepCheckToday(it);
+  const good = chk && chk.state==='good', bad = chk && chk.state==='spoiled';
+  const who = chk ? `<p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">${good?'Tasted':'Reported spoiled'} by ${escHtml(chk.by.split(' ')[0])} · ${new Date(chk.ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</p>` : '';
+  return `<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;">
+    <p style="font-size:12px;font-weight:600;margin:0 0 6px;">Quality check</p>
+    <label style="display:flex;align-items:center;gap:10px;font-size:14px;padding:6px 0;"><input type="checkbox" style="width:20px;height:20px;" ${good?'checked':''} onchange="setPrepCheck('${it.id}','good')" /> Tasted, in good condition</label>
+    <label style="display:flex;align-items:center;gap:10px;font-size:14px;padding:6px 0;"><input type="checkbox" style="width:20px;height:20px;" ${bad?'checked':''} onchange="setPrepCheck('${it.id}','spoiled')" /> Spoiled, needs to prepare a new batch</label>
+    ${who}</div>`;
+}
+function openPrepDetail(id){ ui.modal = {type:'prep-detail', id}; render(); }
+function renderPrepDetailModal(){
+  const u = currentUser();
+  const it = DB.prep.items.find(x=>x.id===ui.modal.id);
+  if(!it) return '';
+  const tot = prepTotal(it);
+  const r = prepOpenReq(it.id);
+  const batches = it.batches.filter(b=>b.left>0).sort((a,b)=>a.madeOn.localeCompare(b.madeOn)).map(b=>`
+    <div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <div><strong>${prepDateFmt(b.madeOn)}</strong> · ${gfmt(b.grams)} made${b.by?' by '+escHtml(b.by.split(' ')[0]):''}${b.useBy?`<div style="font-size:11px;color:var(--text-muted);">Use by ${prepDateFmt(b.useBy)}</div>`:''}${b.notes?`<div style="font-size:11px;color:var(--text-muted);">${escHtml(b.notes)}</div>`:''}</div>
+      <div style="font-weight:600;white-space:nowrap;${b.spoiled?'color:var(--urgent);text-decoration:line-through;':''}">${b.spoiled?'Spoiled · ':''}${gfmt(b.left)}${b.spoiled?'':' left'}</div></div>`).join('') || `<p style="font-size:13px;color:var(--text-muted);margin:6px 0;">No batches with stock left.</p>`;
+  const lastCount = DB.prep.counts.filter(c=>c.itemId===it.id).sort((a,b)=>b.ts-a.ts)[0];
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><p class="modal-title" style="margin:0;">${escHtml(it.name)}</p>${prepStatusPill(it)}</div>
+    ${prepLocLabel(it)?`<p style="font-size:12px;color:var(--accent);margin:4px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}
+    <p style="font-size:26px;font-weight:600;margin:8px 0 0;">${gfmt(tot)}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${lastCount?'Counted '+new Date(lastCount.ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+' by '+escHtml((lastCount.by||'').split(' ')[0])+' · ':''}${it.low>0?'low at '+gfmt(it.low):'no low amount set'}</p>
+    <p style="font-size:12px;font-weight:600;margin:6px 0 0;">Batches</p>${batches}
+    ${prepQualityHtml(it)}
+    ${r?`<p style="font-size:12px;color:var(--text-muted);margin:10px 0 0;">${r.status==='making'?escHtml(r.takenBy)+' is making it.':'Requested by '+escHtml(r.by)+'.'}</p>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+      ${r ? (r.status==='making' ? `<button class="btn" style="width:auto;padding:9px 14px;" onclick="finishPrep('${it.id}')">Done, add batch</button>` : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="takePrep('${it.id}');closeModal()">I'll make it</button>`) : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="requestPrep('${it.id}')">Request prep</button>`}
+      <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepCountModal('${it.id}')">Update grams</button>
+      <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepBatchModal('${it.id}',false)">New batch</button>
+    </div>
+    <div style="display:flex;gap:14px;margin-top:12px;">
+      ${isMgr(u)?`<button class="link-btn" onclick="openPrepItemModal('${it.id}')">Edit item</button>`:''}
+      ${(isMgr(u)&&r)?`<button class="link-btn" onclick="cancelPrepRequest('${it.id}')">Cancel request</button>`:''}
+      <button class="link-btn" style="margin-left:auto;" onclick="closeModal()">Close</button>
+    </div></div></div>`;
+}
+
+function openPrepBatchModal(itemId, finish){
+  if(!DB.prep.items.length) return;
+  ui.modal = {type:'prep-batch', itemId: itemId || DB.prep.items[0].id, finish: !!finish, date: dateStr(new Date()), grams:'', useBy:'', notes:''};
+  render();
+}
+function renderPrepBatchModal(){
+  const m = ui.modal;
+  const opts = DB.prep.items.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(i=>`<option value="${i.id}" ${i.id===m.itemId?'selected':''}>${escHtml(i.name)}</option>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
+    <p class="modal-title">New batch</p>
+    <div class="field"><label>Item</label><select id="pb-item">${opts}</select></div>
+    <div class="field"><label>Date made</label><input id="pb-date" type="date" value="${m.date}" /></div>
+    <div class="field"><label>Grams made</label><input id="pb-grams" type="number" inputmode="numeric" min="0" value="${escHtml(String(m.grams))}" placeholder="e.g. 3000" /></div>
+    <div class="field"><label>Use by (optional)</label><input id="pb-useby" type="date" value="${m.useBy}" /></div>
+    <div class="field"><label>Notes (optional)</label><input id="pb-notes" value="${escHtml(m.notes)}" placeholder="e.g. Batch 2, new eggs" /></div>
+    <div class="modal-row-actions"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" onclick="savePrepBatch()">Save batch</button></div>
+  </div></div>`;
+}
+function savePrepBatch(){
+  const g = id => document.getElementById(id).value;
+  const it = DB.prep.items.find(x=>x.id===g('pb-item'));
+  const grams = parseFloat(g('pb-grams'));
+  if(!it || !grams || grams<=0){ showToast('Enter the grams made'); return; }
+  const u = currentUser();
+  if(it.check && it.check.state==='spoiled'){ it.batches = it.batches.filter(b=>!b.spoiled); delete it.check; }
+  it.batches.push({id:uid('pbt'), madeOn:g('pb-date')||dateStr(new Date()), grams, left:grams, useBy:g('pb-useby')||'', notes:g('pb-notes').trim(), by:u.name, ts:Date.now()});
+  DB.prep.requests = DB.prep.requests.filter(r=>r.itemId!==it.id);
+  persist(['prep']);
+  logActivity(`made a batch of ${it.name} (${Math.round(grams)} g)`);
+  showToast('Batch saved');
+  ui.modal = null; render();
+}
+
+function openPrepCountModal(onlyId){
+  ui.modal = {type:'prep-count', onlyId: onlyId||null};
+  render();
+}
+function renderPrepCountModal(){
+  const m = ui.modal;
+  const locRank = it=>{
+    const li = DB.locations.findIndex(l=>l.id===it.locId);
+    if(li<0) return [999,999];
+    const si = (DB.locations[li].subs||[]).findIndex(x=>x.id===it.subId);
+    return [li, si<0 ? -1 : si];
+  };
+  const list = DB.prep.items.filter(i=>!m.onlyId || i.id===m.onlyId).sort((a,b)=>{
+    const ra = locRank(a), rb = locRank(b);
+    return (ra[0]-rb[0]) || (ra[1]-rb[1]) || a.name.localeCompare(b.name);
+  });
+  const today = dateStr(new Date());
+  let lastLoc = null;
+  const rows = list.map(it=>{
+    const lbl = prepLocLabel(it) || 'No location';
+    let head = '';
+    if(!m.onlyId && lbl!==lastLoc){ head = `<p style="font-size:12px;font-weight:600;color:var(--accent);margin:12px 0 0;">📍 ${escHtml(lbl)}</p>`; lastLoc = lbl; }
+    const prev = DB.prep.counts.filter(c=>c.itemId===it.id && c.date<today).sort((a,b)=>b.ts-a.ts)[0];
+    const cur = DB.prep.counts.find(c=>c.itemId===it.id && c.date===today);
+    return `${head}<div style="padding:10px 0;border-bottom:1px solid var(--border);"><div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:14px;font-weight:600;">${escHtml(it.name)}</span><span style="font-size:11px;color:var(--text-muted);">${prev?'Before: '+gfmt(prev.grams):'Now: '+gfmt(prepTotal(it))}</span></div>
+      <input id="pc-${it.id}" data-id="${it.id}" class="pc-in" type="number" inputmode="numeric" min="0" placeholder="Grams left" value="${cur?cur.grams:''}" style="margin-top:6px;" />
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0 0;"><input type="checkbox" id="pcg-${it.id}" style="width:20px;height:20px;" ${(prepCheckToday(it)||{}).state==='good'?'checked':''} onchange="if(this.checked)document.getElementById('pcs-${it.id}').checked=false" /> Tasted, in good condition</label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:4px 0 0;"><input type="checkbox" id="pcs-${it.id}" style="width:20px;height:20px;" ${(prepCheckToday(it)||{}).state==='spoiled'?'checked':''} onchange="if(this.checked)document.getElementById('pcg-${it.id}').checked=false" /> Spoiled, needs to prepare a new batch</label></div>`;
+  }).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
+    <p class="modal-title">${m.onlyId?'Update grams':'Daily count'} · ${new Date().toLocaleDateString([], {month:'short',day:'numeric'})}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 4px;">Type the grams left. Leave blank to skip an item.</p>
+    ${rows}
+    <div class="modal-row-actions" style="margin-top:12px;"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" onclick="savePrepCount()">Save count</button></div>
+  </div></div>`;
+}
+function savePrepCount(){
+  const u = currentUser();
+  const today = dateStr(new Date());
+  let n = 0;
+  document.querySelectorAll('.pc-in').forEach(inp=>{
+    const cit = DB.prep.items.find(x=>x.id===inp.dataset.id);
+    if(cit){
+      const g = document.getElementById('pcg-'+cit.id), sp = document.getElementById('pcs-'+cit.id);
+      const was = (prepCheckToday(cit)||{}).state || null;
+      const now = (sp && sp.checked) ? 'spoiled' : ((g && g.checked) ? 'good' : null);
+      if(now && now!==was){ applyPrepCheck(cit, now); n++; }
+      else if(!now && was){ applyPrepCheck(cit, null); n++; }
+      if(now==='spoiled') return;
+    }
+    if(inp.value==='') return;
+    const grams = Math.max(0, parseFloat(inp.value)||0);
+    const it = DB.prep.items.find(x=>x.id===inp.dataset.id);
+    if(!it) return;
+    let diff = grams - prepTotal(it);
+    const live = it.batches.filter(b=>b.left>0 && !b.spoiled).sort((a,b)=>a.madeOn.localeCompare(b.madeOn));
+    if(diff < 0){
+      let rem = -diff;
+      for(const b of live){ const take = Math.min(b.left, rem); b.left -= take; rem -= take; if(b.left<=0) b.zeroTs = Date.now(); if(rem<=0) break; }
+    } else if(diff > 0){
+      if(live.length) live[live.length-1].left += diff;
+      else it.batches.push({id:uid('pbt'), madeOn:today, grams:diff, left:diff, useBy:'', notes:'Counted', by:u.name, ts:Date.now()});
+    }
+    DB.prep.counts = DB.prep.counts.filter(c=>!(c.itemId===it.id && c.date===today));
+    DB.prep.counts.push({itemId:it.id, date:today, grams, by:u.name, ts:Date.now()});
+    n++;
+  });
+  if(!n){ showToast('Enter at least one amount'); return; }
+  persist(['prep']);
+  logActivity(`counted in-house prep (${n} item${n===1?'':'s'})`);
+  showToast('Count saved');
+  ui.modal = null; render();
+}
 function roleLabel(r){ return r==='manager' ? 'Team Leader' : r; }
 function recipesHiddenFor(u){ return !RECIPES_TAB_ENABLED || !!(DB.settings.hideRecipes && u && !isOwner(u)); }
 function toggleHideRecipes(){
@@ -1837,9 +2235,11 @@ function render(){
   if(ui.screen==='sales-trends'){ body = renderSalesTrends(); app.innerHTML = body; return; }
   if(ui.screen==='wastage-trends'){ body = renderWastageTrends(); app.innerHTML = body; return; }
   if(ui.tab==='recipes' && (recipesHiddenFor(currentUser()) || !RECIPES_TAB_ENABLED)) ui.tab = 'home';
+  if((ui.tab==='menu' || ui.tab==='prep') && tabHiddenFor(ui.tab, currentUser())) ui.tab = 'home';
   if(ui.tab==='home') body = renderHome();
   else if(ui.tab==='stock') body = renderStock();
   else if(ui.tab==='menu') body = renderMenu();
+  else if(ui.tab==='prep') body = renderPrep();
   else if(ui.tab==='recipes') body = renderRecipes();
   else if(ui.tab==='team') body = renderTeam();
   else if(ui.tab==='profile') body = renderProfile();
@@ -2328,7 +2728,8 @@ function renderHome(){
       <div class="section-title">Inventory Summary</div>
       ${statRow}
       <div class="section-title">Needs attention</div>
-      <div class="card" style="padding:6px 12px;">${attentionRows}</div>
+      <div class="card" style="padding:6px 12px;margin-bottom:14px;">${attentionRows}</div>
+      ${prepNeedsHtml(u)}
     </div>`;
   }
 
@@ -2344,7 +2745,8 @@ function renderHome(){
     ${renderNotesCard()}
     ${statRow}
     <div class="section-title">Needs attention</div>
-    <div class="card" style="padding:6px 12px;">${attentionRows}</div>
+    <div class="card" style="padding:6px 12px;margin-bottom:14px;">${attentionRows}</div>
+    ${prepNeedsHtml(u)}
   </div>`;
 }
 
@@ -2983,6 +3385,11 @@ function renderProfile(){
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openPayrollHoursScreen()">Hours &amp; payroll</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openSalesTrendsScreen()">Sales trends</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageTrendsScreen()">Wastage trends</button>
+    <div class="card" style="margin-bottom:10px;">
+      <p style="font-size:13px;font-weight:600;margin:0 0 8px;">Bottom menu tabs for your team</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;"><div><p style="font-size:13px;margin:0;">Menu tab</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${DB.settings.hideMenuTab?'Hidden from team':'Shown to team'}</p></div><button class="btn ${DB.settings.hideMenuTab?'btn-secondary':''}" style="width:auto;padding:8px 14px;" onclick="toggleTabHidden('menu')">${DB.settings.hideMenuTab?'Off':'On'}</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div><p style="font-size:13px;margin:0;">In-house prep tab</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${DB.settings.hidePrepTab?'Hidden from team':'Shown to team'}</p></div><button class="btn ${DB.settings.hidePrepTab?'btn-secondary':''}" style="width:auto;padding:8px 14px;" onclick="toggleTabHidden('prep')">${DB.settings.hidePrepTab?'Off':'On'}</button></div>
+    </div>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openOrderTemplate()">Order message wording</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="makeRecoveryCode()">Create password recovery code</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openActivityScreen()">Activity log</button>
@@ -3016,11 +3423,13 @@ function renderProfile(){
 
 function renderBottomNav(){
   const u = currentUser();
-  const tabs = [
+  let tabs = [
     {id:'home', label:'Home', ico:'⌂'},
     {id:'stock', label:'Inventory', ico:'▤'},
     {id:'menu', label:'Menu', ico:'<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v6a2 2 0 0 0 2 2v10"/><path d="M4 3v5"/><path d="M10 3v5"/><path d="M8 3v8"/><ellipse cx="17" cy="7" rx="2.6" ry="4"/><path d="M17 11v10"/></svg>'},
   ];
+  tabs = tabs.filter(t=> !(t.id==='menu' && tabHiddenFor('menu',u)));
+  if(!tabHiddenFor('prep',u)) tabs.splice(tabs.findIndex(t=>t.id==='menu')>=0 ? tabs.findIndex(t=>t.id==='menu')+1 : 2, 0, {id:'prep', label:'In-house prep', ico:'<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11h16v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z"/><path d="M8 8V5M12 8V3M16 8V5"/></svg>'});
   if(RECIPES_TAB_ENABLED && !recipesHiddenFor(u)) tabs.push({id:'recipes', label:'Recipes', ico:'≡'});
   if(isMgr(u)) tabs.push({id:'team', label:'Team', ico:'◎'});
   tabs.push({id:'profile', label:'Profile', ico:'●'});
@@ -3031,6 +3440,11 @@ function renderBottomNav(){
 
 function renderModal(){
   if(!ui.modal) return '';
+  if(ui.modal.type==='prep-delete') return renderPrepDeleteConfirm();
+  if(ui.modal.type==='prep-item') return renderPrepItemModal();
+  if(ui.modal.type==='prep-detail') return renderPrepDetailModal();
+  if(ui.modal.type==='prep-batch') return renderPrepBatchModal();
+  if(ui.modal.type==='prep-count') return renderPrepCountModal();
   if(ui.modal.type==='recovery-code') return renderRecoveryModal();
   if(ui.modal.type==='order-msg') return renderOrderMsgModal();
   if(ui.modal.type==='order-template') return renderOrderTemplateModal();

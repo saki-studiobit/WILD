@@ -2903,8 +2903,7 @@ function renderStock(){
   </header>
   <div class="screen" style="padding-top:0;">
     <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="openOilLogScreen()">🛢 Cooking Oil Reporting</button>
-    ${isMgr(u) ? `<div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="document.getElementById('hidden-inventory-csv-input').click()">Import CSV</button><button class="btn btn-secondary" onclick="downloadInventoryTemplate()">Download template</button></div>` : ''}
-    ${isOwner(u) ? `<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="downloadInventory()">Download inventory</button>` : ''}
+    ${isMgr(u) ? `<div class="fab-row" style="margin-bottom:14px;gap:6px;"><button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="document.getElementById('hidden-inventory-csv-input').click()">Import CSV</button><button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="downloadInventoryTemplate()">Template</button>${isOwner(u) ? `<button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="downloadInventory()">Download inventory</button>` : ''}</div>` : ''}
     <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
     ${subChips}

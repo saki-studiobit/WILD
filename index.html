@@ -1727,6 +1727,16 @@ function downloadInventoryTemplate(){
     ['Oat milk','Cafe counter','Under counter','Brand X','L','5','2','1','','','Lattes, cappuccinos'],
   ]);
 }
+function downloadInventory(){
+  if(!isOwner(currentUser())) return;
+  const rows = DB.items.map(i=>{
+    const loc = DB.locations.find(l=>l.id===i.locId);
+    const sub = loc ? (loc.subs||[]).find(x=>x.id===i.subId) : null;
+    const opened = i.trackOpened ? openedLinesOf(i).filter(l=>(l.qty||0)||l.note).map(l=>`${l.qty||0}${l.note?' ('+l.note+')':''}${openedLineLoc(l)?' at '+openedLineLoc(l):''}`).join('; ') : '';
+    return [i.name, loc?loc.name:'', sub?sub.name:'', i.brand||'', i.unit||'', i.qty, i.low||0, i.urgent||0, i.supplier||'', i.supplierPhone||'', i.usage||'', statusLabel(itemStatus(i)), opened, i.updatedBy||'', i.updatedAt ? new Date(i.updatedAt).toLocaleString() : ''];
+  });
+  downloadCSV('inventory-' + dateStr(new Date()) + '.csv', ['Name','Category','Location','Brand','Unit','Starting Count','Low Stock Reminder','Urgent Stock Reminder','Supplier','Supplier Phone','Usage','Status','Opened','Last updated by','Last updated'], rows);
+}
 function importInventoryCSV(e){
   readCsvForImport(e, 'items', (rows, rawHeader, header)=>{
     const nameIdx = csvCol(header, ['name','item','item name','product','product name','items']);
@@ -2894,6 +2904,7 @@ function renderStock(){
   <div class="screen" style="padding-top:0;">
     <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="openOilLogScreen()">🛢 Cooking Oil Reporting</button>
     ${isMgr(u) ? `<div class="fab-row" style="margin-bottom:14px;"><button class="btn btn-secondary" onclick="document.getElementById('hidden-inventory-csv-input').click()">Import CSV</button><button class="btn btn-secondary" onclick="downloadInventoryTemplate()">Download template</button></div>` : ''}
+    ${isOwner(u) ? `<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="downloadInventory()">Download inventory</button>` : ''}
     <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
     <div class="chip-row">${catChips}</div>
     ${subChips}

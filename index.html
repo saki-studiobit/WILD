@@ -1141,6 +1141,36 @@ function saveNewOrEditedItem(){
   persist(['items']);
   closeModal();
 }
+function openDeleteAllInventory(){
+  if(!isOwner(currentUser())) return;
+  ui.modal = {type:'delete-all-inv'};
+  render();
+}
+function renderDeleteAllInvModal(){
+  const n = DB.items.length;
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet">
+    <p class="modal-title" style="color:var(--urgent);">Delete all inventory?</p>
+    <p style="font-size:13px;line-height:1.5;margin:0 0 10px;">This removes all <strong>${n} item${n===1?'':'s'}</strong> and clears the shopping list marks. Your locations, prep items and team stay as they are.</p>
+    <p style="font-size:13px;line-height:1.5;margin:0 0 10px;">A backup file of your inventory downloads first. You can bring items back later with Import CSV.</p>
+    <div class="field"><label>Type DELETE to confirm</label><input id="del-all-text" autocomplete="off" autocapitalize="characters" placeholder="DELETE" /></div>
+    <div class="modal-row-actions"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" style="background:var(--urgent);" onclick="confirmDeleteAllInventory()">Delete all</button></div>
+  </div></div>`;
+}
+function confirmDeleteAllInventory(){
+  if(!isOwner(currentUser())) return;
+  const t = (document.getElementById('del-all-text').value||'').trim().toUpperCase();
+  if(t!=='DELETE'){ showToast('Type DELETE to confirm'); return; }
+  const n = DB.items.length;
+  if(n) downloadInventory();
+  DB.items = [];
+  DB.shoppingMarks = [];
+  persist(['items','shoppingMarks']);
+  logActivity(`deleted all inventory (${n} items)`);
+  ui.modal = null;
+  ui.screen = 'main'; ui.tab = 'stock';
+  render();
+  showToast('All inventory deleted. Backup downloaded.');
+}
 function deleteItem(itemId){
   const item = DB.items.find(i=>i.id===itemId);
   DB.items = DB.items.filter(i=>i.id!==itemId);
@@ -2933,7 +2963,7 @@ function renderManageLocations(){
     </div>`;
   }).join('');
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Manage locations</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Manage locations</p></div>${isOwner(currentUser()) ? `<button class="btn btn-secondary" style="width:auto;padding:7px 12px;font-size:12px;color:var(--urgent);" onclick="openDeleteAllInventory()">Delete all inventory</button>` : ''}</header>
   <div class="screen" style="padding-top:0;">${rows}</div>`;
 }
 
@@ -3501,6 +3531,7 @@ function renderBottomNav(){
 
 function renderModal(){
   if(!ui.modal) return '';
+  if(ui.modal.type==='delete-all-inv') return renderDeleteAllInvModal();
   if(ui.modal.type==='prep-delete') return renderPrepDeleteConfirm();
   if(ui.modal.type==='prep-item') return renderPrepItemModal();
   if(ui.modal.type==='prep-detail') return renderPrepDetailModal();

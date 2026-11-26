@@ -31,6 +31,8 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;}
+  [onclick], button, .chip, .item-row, .team-row, .nav-item{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
+  input, textarea, select{-webkit-user-select:text;user-select:text;}
   body{
     background:var(--bg);
     color:var(--text);
@@ -327,9 +329,21 @@ function showToast(msg){
   setTimeout(()=>t.remove(), 2000);
 }
 
+function linkKey(i){
+  return String(i.name||'').trim().replace(/\s+/g,' ').toLowerCase() + '|' + String(i.unit||'').trim().toLowerCase();
+}
+function linkedItems(item){
+  const k = linkKey(item);
+  return DB.items.filter(x=>linkKey(x)===k);
+}
 function itemStatus(item){
-  if(item.qty <= (item.urgent||0)) return 'urgent';
-  if(item.qty <= (item.low||0)) return 'low';
+  const group = linkedItems(item);
+  if(!group.length) group.push(item);
+  const total = group.reduce((s,i)=>s+(i.qty||0),0);
+  const low = Math.max(...group.map(i=>i.low||0));
+  const urgent = Math.max(...group.map(i=>i.urgent||0));
+  if(total <= urgent) return 'urgent';
+  if(total <= low) return 'low';
   return 'ok';
 }
 function statusLabel(s){ return s==='urgent'?'Urgent':s==='low'?'Running low':'Monitoring'; }
@@ -2464,7 +2478,7 @@ function renderAuth(){
 function groupedProductStatuses(){
   const groups = new Map();
   DB.items.forEach(i=>{
-    const key = i.name.trim().toLowerCase()+'|'+i.unit;
+    const key = linkKey(i);
     if(!groups.has(key)) groups.set(key, []);
     groups.get(key).push(i);
   });
@@ -2473,9 +2487,10 @@ function groupedProductStatuses(){
     const low = Math.max(...group.map(i=>i.low||0));
     const urgent = Math.max(...group.map(i=>i.urgent||0));
     const status = total<=urgent ? 'urgent' : total<=low ? 'low' : 'ok';
-    return {name:group[0].name, unit:group[0].unit, total, status, itemIds:group.map(i=>i.id), locCount:group.length, supplier:group[0].supplier||'', supplierPhone:group[0].supplierPhone||'', supplierNote:group[0].supplierNote||''};
+    return {name:group[0].name, unit:group[0].unit, total, status, itemIds:group.map(i=>i.id), locCount:group.length, supplier:(group.find(i=>(i.supplier||'').trim())||{}).supplier||'', supplierPhone:(group.find(i=>(i.supplierPhone||'').trim())||{}).supplierPhone||'', supplierNote:(group.find(i=>(i.supplierNote||'').trim())||{}).supplierNote||'', fresh:group.some(i=>i.freshProduce)};
   });
 }
+function setHomeFilter(f){ ui.homeFilter = (ui.homeFilter===f) ? 'all' : f; render(); }
 function openAlertListScreen(filter){ ui.alertFilter = filter; ui.screen = 'alert-list'; render(); }
 function openShoppingListScreen(){ ui.screen = 'shopping-list'; render(); }
 function shoppingMarkKey(itemIds){ return itemIds.slice().sort().join(','); }
@@ -2747,14 +2762,17 @@ function renderHome(){
   const groups = groupedProductStatuses();
   const urgentGroups = groups.filter(g=>g.status==='urgent');
   const lowGroups = groups.filter(g=>g.status==='low');
+  const hf = (ui.homeFilter||'all');
+  const ring = (on,c)=> on ? `box-shadow:0 0 0 2px ${c};` : '';
   const statRow = `
     <div class="stat-row">
-      <div class="stat-pill"><p class="stat-num">${DB.items.length}</p><p class="stat-label">Total items</p></div>
-      <div class="stat-pill" style="background:var(--low-bg);cursor:pointer;" onclick="${lowGroups.length?`openAlertListScreen('low')`:''}"><p class="stat-num" style="color:var(--low);">${lowGroups.length}</p><p class="stat-label" style="color:var(--low);">Running low</p></div>
-      <div class="stat-pill" style="background:var(--urgent-bg);cursor:pointer;" onclick="${urgentGroups.length?`openAlertListScreen('urgent')`:''}"><p class="stat-num" style="color:var(--urgent);">${urgentGroups.length}</p><p class="stat-label" style="color:var(--urgent);">Urgent</p></div>
+      <div class="stat-pill" style="cursor:pointer;${ring(hf==='all','var(--accent)')}" onclick="setHomeFilter('all')"><p class="stat-num">${DB.items.length}</p><p class="stat-label">Total items</p></div>
+      <div class="stat-pill" style="background:var(--low-bg);cursor:pointer;${ring(hf==='low','var(--low)')}" onclick="setHomeFilter('low')"><p class="stat-num" style="color:var(--low);">${lowGroups.length}</p><p class="stat-label" style="color:var(--low);">Running low</p></div>
+      <div class="stat-pill" style="background:var(--urgent-bg);cursor:pointer;${ring(hf==='urgent','var(--urgent)')}" onclick="setHomeFilter('urgent')"><p class="stat-num" style="color:var(--urgent);">${urgentGroups.length}</p><p class="stat-label" style="color:var(--urgent);">Urgent</p></div>
     </div>`;
 
-  const attention = [...urgentGroups, ...lowGroups].slice(0,8);
+  const attention = hf==='low' ? lowGroups : hf==='urgent' ? urgentGroups : [...urgentGroups, ...lowGroups].slice(0,8);
+  const attentionTitle = hf==='low' ? 'Running low' : hf==='urgent' ? 'Urgent' : 'Needs attention';
   const attentionRows = attention.length ? attention.map(g=>{
     const idsCsv = g.itemIds.join(',');
     return `<div class="item-row" onclick="openGroupOrSingle('${idsCsv}')">
@@ -2763,7 +2781,7 @@ function renderHome(){
       </div>
       <span class="badge ${statusBadgeClass(g.status)}">${statusLabel(g.status)}</span>
     </div>`;
-  }).join('') : `<div class="empty-note">Everything is well stocked.</div>`;
+  }).join('') : `<div class="empty-note" style="padding:10px;">${hf==='low' ? 'Nothing is running low.' : hf==='urgent' ? 'Nothing is urgent.' : 'Everything is well stocked.'}</div>`;
 
   const todayReport = findSalesReport(dateStr(new Date()));
   const cashCountDone = todayReport && todayReport.cashFundsBy;
@@ -2818,7 +2836,7 @@ function renderHome(){
       ${eventsCard}
       <div class="section-title">Inventory Summary</div>
       ${statRow}
-      <div class="section-title">Needs attention</div>
+      <div class="section-title">${attentionTitle}</div>
       <div class="card" style="padding:6px 12px;margin-bottom:14px;">${attentionRows}</div>
       ${prepNeedsHtml(u)}
     </div>`;
@@ -2835,7 +2853,7 @@ function renderHome(){
     ${actionButtons}
     ${renderNotesCard()}
     ${statRow}
-    <div class="section-title">Needs attention</div>
+    <div class="section-title">${attentionTitle}</div>
     <div class="card" style="padding:6px 12px;margin-bottom:14px;">${attentionRows}</div>
     ${prepNeedsHtml(u)}
   </div>`;
@@ -2868,7 +2886,7 @@ function renderStock(){
   if(ui.stockCat==='all'){
     const groups = new Map();
     items.forEach(i=>{
-      const key = i.name.trim().toLowerCase()+'|'+i.unit;
+      const key = linkKey(i);
       if(!groups.has(key)) groups.set(key, []);
       groups.get(key).push(i);
     });
@@ -3798,7 +3816,7 @@ function renderItemQtyModal(){
   const usageBlock = item.usage ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin:10px 0 0;">Used for: ${item.usage}</p>` : '';
   const todayCheck = item.freshProduce ? DB.freshProduceChecks.find(c=>c.itemId===item.id && c.date===dateStr(new Date())) : null;
   const freshCheckBlock = item.freshProduce ? `
-    <div class="card" style="margin:14px 0 0;padding:10px 14px;cursor:pointer;" onclick="toggleFreshProduceCheck('${item.id}')">
+    <div class="card" role="checkbox" aria-checked="${todayCheck?'true':'false'}" tabindex="0" style="margin:14px 0 0;padding:10px 14px;cursor:pointer;" onclick="toggleFreshProduceCheck('${item.id}')">
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:18px;">${todayCheck?'✅':'⬜'}</span>
         <div><p style="font-size:13px;font-weight:600;margin:0;">🥬 Checked condition/freshness today</p>${todayCheck?`<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Checked by ${todayCheck.checkedBy}</p>`:''}</div>
@@ -4222,7 +4240,7 @@ function renderMorningPriority(){
   if(ui.priorityCat==='all'){
     const groups = new Map();
     pinned.forEach(i=>{
-      const key = i.name.trim().toLowerCase()+'|'+i.unit;
+      const key = linkKey(i);
       if(!groups.has(key)) groups.set(key, []);
       groups.get(key).push(i);
     });
@@ -4282,18 +4300,21 @@ function renderMorningPriority(){
 function renderFreshProduce(){
   const all = DB.items.slice().sort((a,b)=>a.name.localeCompare(b.name));
   const allFresh = all.filter(i=>i.freshProduce);
-  const tagged = allFresh.filter(i=>itemStatus(i)==='urgent');
+  const tagged = groupedProductStatuses().filter(g=>g.fresh && g.status==='urgent');
   const today = dateStr(new Date());
   const beforeChecks = DB.freshProduceChecks.length;
   DB.freshProduceChecks = DB.freshProduceChecks.filter(c=>c.date===today);
   if(DB.freshProduceChecks.length !== beforeChecks) persist(['freshProduceChecks']);
 
-  const taggedRows = tagged.length ? tagged.map(i=>{
-    return `<div class="team-row">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">${i.name}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${i.qty} ${i.unit}</p></div>
+  const freshBySup = {};
+  tagged.forEach(g=>{ const k = (g.supplier||'').trim() || 'No supplier assigned'; (freshBySup[k] = freshBySup[k] || []).push(g); });
+  const freshSupNames = Object.keys(freshBySup).sort((a,b)=> a==='No supplier assigned' ? 1 : b==='No supplier assigned' ? -1 : a.localeCompare(b));
+  const taggedRows = tagged.length ? freshSupNames.map(name=>`
+    <p style="font-size:12px;font-weight:600;color:var(--accent);margin:10px 0 2px;">${escHtml(name)}</p>
+    ${freshBySup[name].map(g=>`<div class="team-row">
+      <div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(g.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${g.total} ${escHtml(g.unit)}${g.locCount>1?' in total ('+g.locCount+' locations)':''}</p></div>
       <span class="badge badge-urgent">Urgent</span>
-    </div>`;
-  }).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
+    </div>`).join('')}`).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
 
   const qualityRows = allFresh.length ? allFresh.map(i=>{
     const check = DB.freshProduceChecks.find(c=>c.itemId===i.id && c.date===today);
@@ -4309,7 +4330,7 @@ function renderFreshProduce(){
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
   <div class="screen" style="padding-top:0;">
     <div class="section-title">🛒 To buy today</div>
-    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Only fresh produce items that are urgently low show up here.</p>
+    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Fresh produce that is urgently low, counting all locations together, grouped by supplier.</p>
     <div class="card" style="padding:6px 16px;">${taggedRows}</div>
     <div class="section-title">🔍 Quality check status</div>
     <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Checked while counting each item in Inventory. This list is view-only.</p>

@@ -33,6 +33,10 @@
   html,body{margin:0;padding:0;height:100%;}
   [onclick], button, .chip, .item-row, .team-row, .nav-item{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
   input, textarea, select{-webkit-user-select:text;user-select:text;}
+  .tick-row{display:flex;align-items:center;gap:12px;width:100%;background:none;border:none;border-bottom:1px solid var(--border);padding:12px 0;text-align:left;font:inherit;color:inherit;cursor:pointer;touch-action:manipulation;}
+  .tick-row:last-child{border-bottom:none;}
+  .tick-box{flex:0 0 auto;width:26px;height:26px;border-radius:7px;border:2px solid var(--border-strong, #bbb);display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;color:#fff;}
+  .tick-box.on{background:#2F8F4E;border-color:#2F8F4E;}
   body{
     background:var(--bg);
     color:var(--text);
@@ -3816,11 +3820,11 @@ function renderItemQtyModal(){
   const usageBlock = item.usage ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin:10px 0 0;">Used for: ${item.usage}</p>` : '';
   const todayCheck = item.freshProduce ? DB.freshProduceChecks.find(c=>c.itemId===item.id && c.date===dateStr(new Date())) : null;
   const freshCheckBlock = item.freshProduce ? `
-    <div class="card" role="checkbox" aria-checked="${todayCheck?'true':'false'}" tabindex="0" style="margin:14px 0 0;padding:10px 14px;cursor:pointer;" onclick="toggleFreshProduceCheck('${item.id}')">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:18px;">${todayCheck?'✅':'⬜'}</span>
-        <div><p style="font-size:13px;font-weight:600;margin:0;">🥬 Checked condition/freshness today</p>${todayCheck?`<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Checked by ${todayCheck.checkedBy}</p>`:''}</div>
-      </div>
+    <div class="card" style="margin:14px 0 0;padding:0 14px;">
+      <button type="button" class="tick-row" role="checkbox" aria-checked="${todayCheck?'true':'false'}" onclick="toggleFreshProduceCheck('${item.id}')">
+        <span class="tick-box ${todayCheck?'on':''}">${todayCheck?'✓':''}</span>
+        <span style="flex:1;"><span style="display:block;font-size:13px;font-weight:600;">🥬 Checked condition/freshness today</span>${todayCheck?`<span style="display:block;font-size:11px;color:var(--text-muted);">Checked by ${escHtml(todayCheck.checkedBy)}</span>`:''}</span>
+      </button>
     </div>` : '';
 
   const openedBlock = item.trackOpened ? `
@@ -4311,17 +4315,20 @@ function renderFreshProduce(){
   const freshSupNames = Object.keys(freshBySup).sort((a,b)=> a==='No supplier assigned' ? 1 : b==='No supplier assigned' ? -1 : a.localeCompare(b));
   const taggedRows = tagged.length ? freshSupNames.map(name=>`
     <p style="font-size:12px;font-weight:600;color:var(--accent);margin:10px 0 2px;">${escHtml(name)}</p>
-    ${freshBySup[name].map(g=>`<div class="team-row">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">${escHtml(g.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${g.total} ${escHtml(g.unit)}${g.locCount>1?' in total ('+g.locCount+' locations)':''}</p></div>
-      <span class="badge badge-urgent">Urgent</span>
-    </div>`).join('')}`).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
+    ${freshBySup[name].map(g=>{
+      const key = shoppingMarkKey(g.itemIds);
+      const mark = DB.shoppingMarks.find(m=>m.key===key);
+      return `<div class="team-row">
+      <div><p style="font-size:13px;font-weight:600;margin:0;${mark?'text-decoration:line-through;color:var(--text-muted);':''}">${escHtml(g.name)}</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${g.total} ${escHtml(g.unit)}${g.locCount>1?' in total ('+g.locCount+' locations)':''}${mark?' · ordered by '+escHtml(mark.by||''):''}</p></div>
+      <div style="display:flex;align-items:center;gap:8px;">${mark ? `<span class="badge" style="background:#E3F3E8;color:#2F8F4E;">✓ Ordered</span>` : `<span class="badge badge-urgent">Urgent</span>`}<button class="link-btn" style="font-size:12px;" onclick="toggleShoppingMark('${key}')">${mark?'Undo':'Mark ordered'}</button></div>
+    </div>`;}).join('')}`).join('') : `<div class="empty-note">✅ Nothing to buy today. Please double check inventory with the team.</div>`;
 
   const qualityRows = allFresh.length ? allFresh.map(i=>{
     const check = DB.freshProduceChecks.find(c=>c.itemId===i.id && c.date===today);
     return `<div class="team-row">
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:18px;">${check?'✅':'⬜'}</span>
-        <div><p style="font-size:13px;font-weight:600;margin:0;${check?'color:var(--text-muted);':''}">${i.name}</p>${check?`<p style="font-size:11px;color:var(--text-muted);margin:0;">Checked by ${check.checkedBy}</p>`:''}</div>
+        <div><p style="font-size:13px;font-weight:600;margin:0;${check?'color:var(--text-muted);':''}">${escHtml(i.name)}</p>${check?`<p style="font-size:11px;color:var(--text-muted);margin:0;">Checked by ${escHtml(check.checkedBy)}</p>`:''}</div>
       </div>
     </div>`;
   }).join('') : `<div class="empty-note">No fresh produce items yet. Owners and Team Leaders can include an item from the item edit screen in Inventory.</div>`;
@@ -4330,7 +4337,7 @@ function renderFreshProduce(){
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToMain()">‹</button><p class="greet" style="font-size:16px;">Fresh Produce</p></div></header>
   <div class="screen" style="padding-top:0;">
     <div class="section-title">🛒 To buy today</div>
-    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Fresh produce that is urgently low, counting all locations together, grouped by supplier.</p>
+    <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Fresh produce that is urgently low, counting all locations together, grouped by supplier. Items marked ordered on the Shopping List show here as ordered.</p>
     <div class="card" style="padding:6px 16px;">${taggedRows}</div>
     <div class="section-title">🔍 Quality check status</div>
     <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Checked while counting each item in Inventory. This list is view-only.</p>

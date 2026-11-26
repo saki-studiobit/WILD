@@ -1011,7 +1011,7 @@ function stampOpened(item){ item.openedBy = currentUser().name; item.openedAt = 
 function addOpenedLine(itemId){
   const item = DB.items.find(i=>i.id===itemId);
   if(!item) return;
-  ensureOpened(item).push({id:uid('op'), qty:1, note:'', locId:'', subId:''});
+  ensureOpened(item).push({id:uid('op'), qty:1, note:'', where:''});
   stampOpened(item); render();
 }
 function removeOpenedLine(itemId, lineId){
@@ -1026,11 +1026,12 @@ function setOpenedLine(itemId, lineId, field, value){
   const l = ensureOpened(item).find(x=>x.id===lineId);
   if(!l) return;
   if(field==='qty'){ const v = parseFloat(value); l.qty = isNaN(v) ? 0 : Math.max(0, Math.round(v*100)/100); }
-  else if(field==='loc'){ const lv = String(value||'').split('|'); l.locId = lv[0]||''; l.subId = lv[1]||''; }
+  else if(field==='where'){ l.where = String(value||'').trim().slice(0,40); }
   else l.note = String(value||'').trim().slice(0,60);
   stampOpened(item);
 }
 function openedLineLoc(l){
+  if(l.where) return l.where;
   if(!l.locId) return '';
   const loc = DB.locations.find(x=>x.id===l.locId);
   if(!loc) return '';
@@ -1048,7 +1049,6 @@ function groupOpenedTag(items){
 }
 function openedTag(i){ return i.trackOpened ? groupOpenedTag([i]) : ''; }
 function openedLinesHtml(item){
-  const locOpts = sel => DB.locations.map(l=>`<optgroup label="${escHtml(l.name)}"><option value="${l.id}|" ${sel.locId===l.id&&!sel.subId?'selected':''}>${escHtml(l.name)} (general)</option>${(l.subs||[]).map(sb=>`<option value="${l.id}|${sb.id}" ${sel.locId===l.id&&sel.subId===sb.id?'selected':''}>${escHtml(l.name)} · ${escHtml(sb.name)}</option>`).join('')}</optgroup>`).join('');
   const fld = 'border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);';
   const rows = openedLinesOf(item).map(l=>`
     <div style="padding:10px 0;border-top:1px solid var(--border);">
@@ -1057,7 +1057,7 @@ function openedLinesHtml(item){
         <input type="text" maxlength="60" value="${escHtml(l.note)}" placeholder="How much is left, e.g. 600 g" style="flex:1;min-width:0;${fld}" onchange="setOpenedLine('${item.id}','${l.id}','note',this.value)" />
         <button type="button" aria-label="Remove" onclick="removeOpenedLine('${item.id}','${l.id}')" style="background:none;border:none;font-size:20px;color:var(--text-muted);padding:4px 6px;cursor:pointer;">×</button>
       </div>
-      <select style="width:100%;margin-top:6px;font-size:14px;${fld}" onchange="setOpenedLine('${item.id}','${l.id}','loc',this.value)"><option value="">Where is it? (same as item)</option>${locOpts(l)}</select>
+      <input type="text" maxlength="40" value="${escHtml(l.where||openedLineLoc(l))}" placeholder="Where is it? e.g. coffee hopper" style="width:100%;margin-top:6px;font-size:14px;box-sizing:border-box;${fld}" onchange="setOpenedLine('${item.id}','${l.id}','where',this.value)" />
     </div>`).join('');
   return rows;
 }

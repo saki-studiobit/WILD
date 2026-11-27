@@ -495,10 +495,10 @@ async function seedDemoData(){
   const dd = n=>dateStr(new Date(Date.now()-n*86400000));
   const du = n=>dateStr(new Date(Date.now()+n*86400000));
   DB.prep = {items:[
-    {id:uid('pp'), name:'Mayonnaise', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:3000, left:1850, useBy:du(5), notes:'Batch 2, new eggs', by:'Jon Cruz', ts:Date.now()}]},
-    {id:uid('pp'), name:'Garlic aioli', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(2), grams:2000, left:320, useBy:du(2), notes:'', by:'Jon Cruz', ts:Date.now()-2*86400000}]},
-    {id:uid('pp'), name:'Pizza dough', low:1500, locId:kitchen.id, subId:kitchen.subs[1].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:6000, left:4200, useBy:du(2), notes:'', by:'Ana Reyes', ts:Date.now()}]},
-    {id:uid('pp'), name:'Caramel sauce', low:400, locId:bar.id, subId:bar.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(3), grams:1500, left:900, useBy:du(10), notes:'', by:'Jon Cruz', ts:Date.now()-3*86400000}]}
+    {id:uid('pp'), name:'Mayonnaise', unit:'g', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:3000, left:1850, useBy:du(5), notes:'Batch 2, new eggs', by:'Jon Cruz', ts:Date.now()}]},
+    {id:uid('pp'), name:'Garlic aioli', unit:'g', low:500, locId:kitchen.id, subId:kitchen.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(2), grams:2000, left:320, useBy:du(2), notes:'', by:'Jon Cruz', ts:Date.now()-2*86400000}]},
+    {id:uid('pp'), name:'Pizza dough', unit:'g', low:1500, locId:kitchen.id, subId:kitchen.subs[1].id, batches:[{id:uid('pbt'), madeOn:dd(0), grams:6000, left:4200, useBy:du(2), notes:'', by:'Ana Reyes', ts:Date.now()}]},
+    {id:uid('pp'), name:'Caramel sauce', unit:'g', low:400, locId:bar.id, subId:bar.subs[0].id, batches:[{id:uid('pbt'), madeOn:dd(3), grams:1500, left:900, useBy:du(10), notes:'', by:'Jon Cruz', ts:Date.now()-3*86400000}]}
   ], requests:[], counts:[]};
   DB.prep.requests.push({id:uid('pr'), itemId:DB.prep.items[3].id, by:'Maria', byId:'x', ts:Date.now()-3600000, status:'requested'});
   DB.prep.requests.push({id:uid('pr'), itemId:DB.prep.items[2].id, by:'Ana Reyes', byId:'x', ts:Date.now()-1800000, status:'making', takenBy:'Jon Cruz', takenTs:Date.now()-1200000});
@@ -1912,7 +1912,8 @@ function prepLocLabel(it){
   return sub ? `${l.name} · ${sub.name}` : l.name;
 }
 function setPrepLoc(v){ ui.prepLoc = v; render(); }
-function gfmt(n){ return Math.round(n).toLocaleString()+' g'; }
+function pu(it){ return (it && it.unit) ? it.unit : 'g'; }
+function pfmt(it, n){ return (Math.round((n||0)*100)/100).toLocaleString()+' '+pu(it); }
 function prepDateFmt(d){ return d ? new Date(d+'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'}) : ''; }
 function prepTotal(it){ return it.batches.reduce((a,b)=>a+(b.spoiled?0:(b.left||0)),0); }
 function prepCheckToday(it){
@@ -1984,7 +1985,7 @@ function prepNeedsHtml(u){
   const rows = list.map(it=>{
     const r = prepOpenReq(it.id);
     const tot = prepTotal(it);
-    let sub = prepIsLow(it) ? `${gfmt(tot)} left · low at ${gfmt(it.low)}` : `${gfmt(tot)} left`;
+    let sub = prepIsLow(it) ? `${pfmt(it,tot)} left · low at ${pfmt(it,it.low)}` : `${pfmt(it,tot)} left`;
     const locTxt = prepLocLabel(it);
     if(r && r.reason==='spoiled' && r.status!=='making') sub = `Spoiled, new batch needed · reported by ${escHtml(r.by)}`;
     else if(r) sub = r.status==='making' ? `${escHtml(r.takenBy)} is making it${r.takenTs?' · started '+new Date(r.takenTs).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}` : `Requested by ${escHtml(r.by)} · ${new Date(r.ts).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`;
@@ -2043,7 +2044,7 @@ function renderPrep(){
     const chk = prepCheckToday(it);
     if(chk && chk.state==='good') tags.push(`<span class="badge" style="background:var(--accent-light);color:var(--accent);">✓ Tasted today</span>`);
     return `<div class="card" style="cursor:pointer;margin-bottom:8px;" onclick="openPrepDetail('${it.id}')">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="min-width:0;"><p style="font-size:14px;font-weight:600;margin:0;">${escHtml(it.name)}</p>${prepLocLabel(it)?`<p style="font-size:11px;color:var(--accent);margin:2px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${meta}</p></div><div style="text-align:right;"><p style="font-size:18px;font-weight:600;margin:0;">${gfmt(tot)}</p></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="min-width:0;"><p style="font-size:14px;font-weight:600;margin:0;">${escHtml(it.name)}</p>${prepLocLabel(it)?`<p style="font-size:11px;color:var(--accent);margin:2px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${meta}</p></div><div style="text-align:right;"><p style="font-size:18px;font-weight:600;margin:0;">${pfmt(it,tot)}</p></div></div>
       <div style="height:6px;border-radius:3px;background:var(--border);margin-top:8px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${color};"></div></div>
       ${tags.length?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${tags.join('')}</div>`:''}
     </div>`;
@@ -2064,7 +2065,7 @@ function renderPrep(){
 function openPrepItemModal(id){
   if(!isMgr(currentUser())) return;
   const it = id ? DB.prep.items.find(x=>x.id===id) : null;
-  ui.modal = {type:'prep-item', id, name: it?it.name:'', low: it?(it.low||''):'', loc: (it&&it.locId) ? it.locId+'|'+(it.subId||'') : ''};
+  ui.modal = {type:'prep-item', id, name: it?it.name:'', unit: it?pu(it):'g', low: it?(it.low||''):'', loc: (it&&it.locId) ? it.locId+'|'+(it.subId||'') : ''};
   render();
 }
 function renderPrepItemModal(){
@@ -2073,8 +2074,9 @@ function renderPrepItemModal(){
     <p class="modal-title">${m.id?'Edit prep item':'New prep item'}</p>
     <div class="field"><label>Name</label><input id="pi-name" value="${escHtml(m.name)}" placeholder="e.g. Mayonnaise" /></div>
     <div class="field"><label>Where is it kept (optional)</label><select id="pi-loc"><option value="">Not set</option>${DB.locations.map(l=>`<optgroup label="${escHtml(l.name)}"><option value="${l.id}|" ${m.loc===l.id+'|'?'selected':''}>${escHtml(l.name)} (general)</option>${(l.subs||[]).map(sb=>`<option value="${l.id}|${sb.id}" ${m.loc===l.id+'|'+sb.id?'selected':''}>${escHtml(l.name)} · ${escHtml(sb.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
-    <div class="field"><label>Low at (grams, optional)</label><input id="pi-low" type="number" inputmode="numeric" min="0" value="${escHtml(String(m.low))}" placeholder="e.g. 500" /></div>
-    <p style="font-size:11px;color:var(--text-muted);margin:-6px 0 12px;">When the grams left drop to this amount, it shows under Needs prep on Home.</p>
+    <div class="field"><label>Unit of measurement</label><input id="pi-unit" list="prep-units" maxlength="12" value="${escHtml(m.unit)}" placeholder="g, kg, pcs, ml..." autocomplete="off" /><datalist id="prep-units"><option value="g"><option value="kg"><option value="ml"><option value="L"><option value="pcs"><option value="portions"><option value="containers"><option value="bags"></datalist></div>
+    <div class="field"><label>Low at (in the unit above, optional)</label><input id="pi-low" type="number" inputmode="numeric" min="0" value="${escHtml(String(m.low))}" placeholder="e.g. 500" /></div>
+    <p style="font-size:11px;color:var(--text-muted);margin:-6px 0 12px;">Type your own unit or pick one. When the amount left drops to this, it shows under Needs prep on Home.</p>
     <div class="modal-row-actions">
       ${m.id?`<button type="button" class="btn btn-secondary" style="color:var(--urgent);" onclick="deletePrepItem('${m.id}')">Delete</button>`:`<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>`}
       <button type="button" class="btn" onclick="savePrepItem()">Save</button>
@@ -2085,12 +2087,13 @@ function savePrepItem(){
   const low = parseFloat(document.getElementById('pi-low').value) || 0;
   if(!name){ showToast('Enter a name'); return; }
   const id = ui.modal.id;
+  const unit = (document.getElementById('pi-unit').value||'').trim().slice(0,12) || 'g';
   const lv = document.getElementById('pi-loc').value.split('|');
   const locId = lv[0] || '', subId = lv[1] || '';
-  if(id){ const it = DB.prep.items.find(x=>x.id===id); it.name = name; it.low = low; it.locId = locId; it.subId = subId; }
+  if(id){ const it = DB.prep.items.find(x=>x.id===id); it.name = name; it.low = low; it.unit = unit; it.locId = locId; it.subId = subId; }
   else {
     if(DB.prep.items.some(x=>x.name.toLowerCase()===name.toLowerCase())){ showToast('That prep item already exists'); return; }
-    DB.prep.items.push({id:uid('pp'), name, low, locId, subId, batches:[]});
+    DB.prep.items.push({id:uid('pp'), name, low, unit, locId, subId, batches:[]});
   }
   persist(['prep']); logActivity(`${id?'edited':'added'} prep item ${name}`);
   ui.modal = null; render();
@@ -2131,20 +2134,20 @@ function renderPrepDetailModal(){
   const r = prepOpenReq(it.id);
   const batches = it.batches.filter(b=>b.left>0).sort((a,b)=>a.madeOn.localeCompare(b.madeOn)).map(b=>`
     <div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
-      <div><strong>${prepDateFmt(b.madeOn)}</strong> · ${gfmt(b.grams)} made${b.by?' by '+escHtml(b.by.split(' ')[0]):''}${b.useBy?`<div style="font-size:11px;color:var(--text-muted);">Use by ${prepDateFmt(b.useBy)}</div>`:''}${b.notes?`<div style="font-size:11px;color:var(--text-muted);">${escHtml(b.notes)}</div>`:''}</div>
-      <div style="font-weight:600;white-space:nowrap;${b.spoiled?'color:var(--urgent);text-decoration:line-through;':''}">${b.spoiled?'Spoiled · ':''}${gfmt(b.left)}${b.spoiled?'':' left'}</div></div>`).join('') || `<p style="font-size:13px;color:var(--text-muted);margin:6px 0;">No batches with stock left.</p>`;
+      <div><strong>${prepDateFmt(b.madeOn)}</strong> · ${pfmt(it,b.grams)} made${b.by?' by '+escHtml(b.by.split(' ')[0]):''}${b.useBy?`<div style="font-size:11px;color:var(--text-muted);">Use by ${prepDateFmt(b.useBy)}</div>`:''}${b.notes?`<div style="font-size:11px;color:var(--text-muted);">${escHtml(b.notes)}</div>`:''}</div>
+      <div style="font-weight:600;white-space:nowrap;${b.spoiled?'color:var(--urgent);text-decoration:line-through;':''}">${b.spoiled?'Spoiled · ':''}${pfmt(it,b.left)}${b.spoiled?'':' left'}</div></div>`).join('') || `<p style="font-size:13px;color:var(--text-muted);margin:6px 0;">No batches with stock left.</p>`;
   const lastCount = DB.prep.counts.filter(c=>c.itemId===it.id).sort((a,b)=>b.ts-a.ts)[0];
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><p class="modal-title" style="margin:0;">${escHtml(it.name)}</p>${prepStatusPill(it)}</div>
     ${prepLocLabel(it)?`<p style="font-size:12px;color:var(--accent);margin:4px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}
-    <p style="font-size:26px;font-weight:600;margin:8px 0 0;">${gfmt(tot)}</p>
-    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${lastCount?'Counted '+new Date(lastCount.ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+' by '+escHtml((lastCount.by||'').split(' ')[0])+' · ':''}${it.low>0?'low at '+gfmt(it.low):'no low amount set'}</p>
+    <p style="font-size:26px;font-weight:600;margin:8px 0 0;">${pfmt(it,tot)}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${lastCount?'Counted '+new Date(lastCount.ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+' by '+escHtml((lastCount.by||'').split(' ')[0])+' · ':''}${it.low>0?'low at '+pfmt(it,it.low):'no low amount set'}</p>
     <p style="font-size:12px;font-weight:600;margin:6px 0 0;">Batches</p>${batches}
     ${prepQualityHtml(it)}
     ${r?`<p style="font-size:12px;color:var(--text-muted);margin:10px 0 0;">${r.status==='making'?escHtml(r.takenBy)+' is making it.':'Requested by '+escHtml(r.by)+'.'}</p>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
       ${r ? (r.status==='making' ? `<button class="btn" style="width:auto;padding:9px 14px;" onclick="finishPrep('${it.id}')">Done, add batch</button>` : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="takePrep('${it.id}');closeModal()">I'll make it</button>`) : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="requestPrep('${it.id}')">Request prep</button>`}
-      <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepCountModal('${it.id}')">Update grams</button>
+      <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepCountModal('${it.id}')">Update amount</button>
       <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepBatchModal('${it.id}',false)">New batch</button>
     </div>
     <div style="display:flex;gap:14px;margin-top:12px;">
@@ -2164,9 +2167,9 @@ function renderPrepBatchModal(){
   const opts = DB.prep.items.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(i=>`<option value="${i.id}" ${i.id===m.itemId?'selected':''}>${escHtml(i.name)}</option>`).join('');
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
     <p class="modal-title">New batch</p>
-    <div class="field"><label>Item</label><select id="pb-item">${opts}</select></div>
+    <div class="field"><label>Item</label><select id="pb-item" onchange="const x=DB.prep.items.find(i=>i.id===this.value);document.getElementById('pb-lbl').textContent='Amount made ('+pu(x)+')'">${opts}</select></div>
     <div class="field"><label>Date made</label><input id="pb-date" type="date" value="${m.date}" /></div>
-    <div class="field"><label>Grams made</label><input id="pb-grams" type="number" inputmode="numeric" min="0" value="${escHtml(String(m.grams))}" placeholder="e.g. 3000" /></div>
+    <div class="field"><label id="pb-lbl">Amount made (${escHtml(pu(DB.prep.items.find(i=>i.id===m.itemId)))})</label><input id="pb-grams" type="number" inputmode="decimal" min="0" value="${escHtml(String(m.grams))}" placeholder="e.g. 3000" /></div>
     <div class="field"><label>Use by (optional)</label><input id="pb-useby" type="date" value="${m.useBy}" /></div>
     <div class="field"><label>Notes (optional)</label><input id="pb-notes" value="${escHtml(m.notes)}" placeholder="e.g. Batch 2, new eggs" /></div>
     <div class="modal-row-actions"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" onclick="savePrepBatch()">Save batch</button></div>
@@ -2176,13 +2179,13 @@ function savePrepBatch(){
   const g = id => document.getElementById(id).value;
   const it = DB.prep.items.find(x=>x.id===g('pb-item'));
   const grams = parseFloat(g('pb-grams'));
-  if(!it || !grams || grams<=0){ showToast('Enter the grams made'); return; }
+  if(!it || !grams || grams<=0){ showToast('Enter the amount made'); return; }
   const u = currentUser();
   if(it.check && it.check.state==='spoiled'){ it.batches = it.batches.filter(b=>!b.spoiled); delete it.check; }
   it.batches.push({id:uid('pbt'), madeOn:g('pb-date')||dateStr(new Date()), grams, left:grams, useBy:g('pb-useby')||'', notes:g('pb-notes').trim(), by:u.name, ts:Date.now()});
   DB.prep.requests = DB.prep.requests.filter(r=>r.itemId!==it.id);
   persist(['prep']);
-  logActivity(`made a batch of ${it.name} (${Math.round(grams)} g)`);
+  logActivity(`made a batch of ${it.name} (${Math.round(grams*100)/100} ${pu(it)})`);
   showToast('Batch saved');
   ui.modal = null; render();
 }
@@ -2211,14 +2214,14 @@ function renderPrepCountModal(){
     if(!m.onlyId && lbl!==lastLoc){ head = `<p style="font-size:12px;font-weight:600;color:var(--accent);margin:12px 0 0;">📍 ${escHtml(lbl)}</p>`; lastLoc = lbl; }
     const prev = DB.prep.counts.filter(c=>c.itemId===it.id && c.date<today).sort((a,b)=>b.ts-a.ts)[0];
     const cur = DB.prep.counts.find(c=>c.itemId===it.id && c.date===today);
-    return `${head}<div style="padding:10px 0;border-bottom:1px solid var(--border);"><div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:14px;font-weight:600;">${escHtml(it.name)}</span><span style="font-size:11px;color:var(--text-muted);">${prev?'Before: '+gfmt(prev.grams):'Now: '+gfmt(prepTotal(it))}</span></div>
-      <input id="pc-${it.id}" data-id="${it.id}" class="pc-in" type="number" inputmode="numeric" min="0" placeholder="Grams left" value="${cur?cur.grams:''}" style="margin-top:6px;" />
+    return `${head}<div style="padding:10px 0;border-bottom:1px solid var(--border);"><div style="display:flex;justify-content:space-between;gap:8px;"><span style="font-size:14px;font-weight:600;">${escHtml(it.name)}</span><span style="font-size:11px;color:var(--text-muted);">${prev?'Before: '+pfmt(it,prev.grams):'Now: '+pfmt(it,prepTotal(it))}</span></div>
+      <input id="pc-${it.id}" data-id="${it.id}" class="pc-in" type="number" inputmode="decimal" min="0" placeholder="Amount left (${escHtml(pu(it))})" value="${cur?cur.grams:''}" style="margin-top:6px;" />
       <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0 0;"><input type="checkbox" id="pcg-${it.id}" style="width:20px;height:20px;" ${(prepCheckToday(it)||{}).state==='good'?'checked':''} onchange="if(this.checked)document.getElementById('pcs-${it.id}').checked=false" /> Tasted, in good condition</label>
       <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:4px 0 0;"><input type="checkbox" id="pcs-${it.id}" style="width:20px;height:20px;" ${(prepCheckToday(it)||{}).state==='spoiled'?'checked':''} onchange="if(this.checked)document.getElementById('pcg-${it.id}').checked=false" /> Spoiled, needs to prepare a new batch</label></div>`;
   }).join('');
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
-    <p class="modal-title">${m.onlyId?'Update grams':'Daily count'} · ${new Date().toLocaleDateString([], {month:'short',day:'numeric'})}</p>
-    <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 4px;">Type the grams left. Leave blank to skip an item.</p>
+    <p class="modal-title">${m.onlyId?'Update amount':'Daily count'} · ${new Date().toLocaleDateString([], {month:'short',day:'numeric'})}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:-8px 0 4px;">Type the amount left, in each item's own unit. Leave blank to skip an item.</p>
     ${rows}
     <div class="modal-row-actions" style="margin-top:12px;"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" onclick="savePrepCount()">Save count</button></div>
   </div></div>`;

@@ -2841,14 +2841,15 @@ function renderHome(){
   const todayReport = findSalesReport(dateStr(new Date()));
   const cashCountDone = todayReport && todayReport.cashFundsBy;
   const actionButtons = isOwner(u) ? '' : `
-    <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Morning Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily Tasks</button>
+    <button class="btn" style="margin-bottom:10px;background:#2F8F4E;" onclick="openMorningCashCountScreen(false)">💰 Report Opening Cash Count${cashCountDone?` ✅ (${todayReport.cashFundsBy})`:''}</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce Needs & Quality Check</button>
     <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openMorningPriorityScreen()">🌅 Morning Priority Inventory</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openFreshProduceScreen()">🥬 Fresh Produce</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 Shopping List</button>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openReceiveDelivery()">🚚 Receive delivery</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="setTab('stock')">📦 Full Inventory (Per Area)</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openShoppingListScreen()">🛒 To Order From Suppliers</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openChecklistHub()">✅ Daily & Weekly Tasks</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openReceiveDelivery()">🚚 Receiving Logs & Expenses</button>
     ${isMgr(u) ? `<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openDeliveriesScreen()">🧾 Deliveries</button>` : ''}
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report wastage</button>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="openWastageModal()">🗑 Report Wastage</button>
     <button class="btn" style="margin-bottom:16px;background:#2F8F4E;" onclick="openSalesReportScreen()">📊 Report Daily Sales</button>`;
 
   const eightySixed = DB.menu.filter(r=>r.outOfStock);
@@ -3644,6 +3645,8 @@ function renderModal(){
   if(ui.modal.type==='online-form') return renderOnlineFormModal();
   if(ui.modal.type==='sales-download-form') return renderSalesDownloadModal();
   if(ui.modal.type==='attendance-photo') return renderAttendancePhotoModal();
+  if(ui.modal.type==='loy-settings') return renderLoySettingsModal();
+  if(ui.modal.type==='loy-range') return renderLoyRangeModal();
   if(ui.modal.type==='confirm-dialog') return renderConfirmModal();
   if(ui.modal.type==='reset-password-form') return renderResetPasswordModal();
   if(ui.modal.type==='reset-all-data-confirm') return renderResetAllDataModal();
@@ -4536,7 +4539,8 @@ function isSalesReportEditable(date){
 }
 function isMorningCashEditable(date){
   const u = currentUser();
-  if(isOwner(u) || date!==dateStr(new Date())) return false;
+  if(isOwner(u)) return !!ui.morningCashEdit;
+  if(date!==dateStr(new Date())) return false;
   const r = findSalesReport(date);
   if(r && (r.morningCashLocked || r.reportLocked)) return false;
   return true;
@@ -4589,6 +4593,7 @@ function renderSalesReport(){
       ${dateNav}
       ${ownerActions}
       <div class="empty-note">No sales report was submitted for this date.</div>
+      ${isOwner(u) ? renderLoyCard(null, date) : ''}
     </div>`;
   }
 
@@ -4605,7 +4610,7 @@ function renderSalesReport(){
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(cashDrawerTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
     <div class="team-row" onclick="openSalesOnlineScreen()">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">📱 Online Sales</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.online.length} entr${r.online.length===1?'y':'ies'}</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">📱 Online Sales</p><p style="font-size:11px;color:var(--text-muted);margin:0;">${r.online.length?r.online.length+' type'+(r.online.length===1?'':'s')+' with sales':'Tap to enter by type'}</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(onlineSalesTotal(r))}</span><span style="color:var(--text-muted);">›</span></div>
     </div>
     <div class="team-row" ${editable?'onclick="openTallyModal()"':''}>
@@ -4613,7 +4618,7 @@ function renderSalesReport(){
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${r.tallyCash!=null?peso(r.tallyCash):'Not entered'}</span>${editable?'<span style="color:var(--text-muted);">›</span>':''}</div>
     </div>
     <div class="team-row" onclick="openMorningCashCountScreen(true)">
-      <div><p style="font-size:13px;font-weight:600;margin:0;">🌅 Cash Funds (morning)</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Starting cash in drawer</p></div>
+      <div><p style="font-size:13px;font-weight:600;margin:0;">🌅 Opening Cash Funds</p><p style="font-size:11px;color:var(--text-muted);margin:0;">Starting cash in drawer</p></div>
       <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:13px;font-weight:600;">${peso(r.cashFunds)}</span><span style="color:var(--text-muted);">›</span></div>
     </div>`;
 
@@ -4637,6 +4642,7 @@ function renderSalesReport(){
     </div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
     ${isOwner(u) ? renderCashCheckCard(r) : ''}
+    ${isOwner(u) ? renderLoyCard(r, date) : ''}
     ${!editable && !r.reportLocked ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:14px;">${date===today?'View only.':'Past reports are view only.'}</p>` : ''}
     ${submitReportBtn}
     ${lockedBanner}
@@ -4653,8 +4659,163 @@ function renderCashCheckCard(r){
     <div style="display:flex;justify-content:space-between;font-size:13px;margin:3px 0;"><span style="color:var(--text-muted);">Expected in drawer</span><span>${peso(c.expected)}</span></div>
     <div style="display:flex;justify-content:space-between;font-size:13px;margin:3px 0;"><span style="color:var(--text-muted);">Counted at closing</span><span>${peso(c.counted)}</span></div>
     <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin:8px 0 0;padding-top:8px;border-top:1px solid var(--border);"><span>Result</span><span style="color:${off?'var(--urgent)':'var(--accent)'};">${word}</span></div>
-    <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Expected = morning cash funds + cash sales tally − expenses paid from the drawer.</p>
+    <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">Expected = opening cash funds + cash sales tally − expenses paid from the drawer.</p>
   </div>`;
+}
+
+/* ---------- Loyverse check (owner only) ---------- */
+const LOY_DEFAULT_MAP = {'CASH':'Cash','P500 TOKEN':'Token','GCASH':'GCash','MAYA':'Maya','UNION BANK':'Union Bank','CREDIT CARD':'Credit Card','GRAB':'GrabFood','FOOD PANDA':'FoodPanda','GOTYME BANK':'GoTyme','SHOPEE FOOD':'ShopeeFood'};
+function loySettings(){ const l = DB.settings.loyverse || {}; return { dayStart: l.dayStart||'05:00', map: l.map||{} }; }
+function loyKey(){ try{ return localStorage.getItem('wild_loy_key')||''; }catch(e){ return ''; } }
+function loyTarget(name){
+  const up = String(name||'').trim().toUpperCase();
+  const m = Object.assign({}, LOY_DEFAULT_MAP, Object.fromEntries(Object.entries(loySettings().map).map(([k,v])=>[k.toUpperCase(),v])));
+  if(m[up]!=null && String(m[up]).trim()!=='') return String(m[up]).trim();
+  return String(name||'').trim().toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+}
+function loyWindow(date){
+  if(ui.loyRange && ui.loyRange.date===date) return {from:ui.loyRange.from, to:ui.loyRange.to, custom:true};
+  const st = loySettings().dayStart;
+  const from = new Date(`${date}T${st}:00+08:00`);
+  return {from:from.toISOString(), to:new Date(from.getTime()+24*3600*1000).toISOString(), custom:false};
+}
+function loyTime(iso){ return new Date(iso).toLocaleString('en-PH',{timeZone:'Asia/Manila',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }
+async function loyFetch(){
+  const date = ui.salesReportDate;
+  const key = loyKey();
+  if(!key){ showToast('Add your app key in Loyverse settings first'); openLoySettings(); return; }
+  const w = loyWindow(date);
+  ui.loy = {date, loading:true};
+  render();
+  try{
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/loyverse-sales`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${SUPABASE_ANON_KEY}`},
+      body: JSON.stringify({from:w.from, to:w.to, appKey:key})
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || data.error) throw new Error(data.error || ('Error '+res.status));
+    ui.loy = {date, data, window:w, at:Date.now()};
+  }catch(e){
+    ui.loy = {date, error: String(e.message||e)};
+  }
+  render();
+}
+function loyUseBusinessDay(){ ui.loyRange = null; ui.loy = null; render(); }
+function renderLoyCard(r, date){
+  const L = ui.loy && ui.loy.date===date ? ui.loy : null;
+  const w = loyWindow(date);
+  const winLine = `${w.custom?'Custom range':'Business day'}: ${loyTime(w.from)} – ${loyTime(w.to)}`;
+  const btns = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+      <button class="btn" style="width:auto;padding:8px 12px;font-size:12px;" onclick="loyFetch()">${L&&L.data?'↻ Refresh':'Check Loyverse'}</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;font-size:12px;" onclick="openLoyRangeModal()">Custom range</button>
+      ${w.custom?`<button class="btn btn-secondary" style="width:auto;padding:8px 12px;font-size:12px;" onclick="loyUseBusinessDay()">Use business day</button>`:''}
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;font-size:12px;" onclick="openLoySettings()">⚙ Settings</button>
+    </div>`;
+  const head = `<p style="margin:0 0 6px;font-size:12px;font-weight:600;color:var(--text-muted);">LOYVERSE CHECK (ONLY YOU SEE THIS)</p>`;
+  if(!L) return `<div class="card" style="margin-top:12px;">${head}<p style="margin:0;font-size:12px;color:var(--text-muted);">${winLine}</p>${btns}</div>`;
+  if(L.loading) return `<div class="card" style="margin-top:12px;">${head}<p style="margin:0;font-size:13px;">Checking Loyverse…</p></div>`;
+  if(L.error) return `<div class="card" style="margin-top:12px;border-color:var(--urgent);background:var(--urgent-bg);">${head}<p style="margin:0;font-size:12px;color:var(--urgent);">Could not check Loyverse: ${escHtml(L.error)}</p>${btns}</div>`;
+  const d = L.data;
+  let cash=0, token=0, tokenCount=0; const online = {};
+  Object.entries(d.byType||{}).forEach(([name,amt])=>{
+    const t = loyTarget(name);
+    if(t.toLowerCase()==='cash') cash += amt;
+    else if(t.toLowerCase()==='token'){ token += amt; }
+    else online[t] = (online[t]||0) + amt;
+  });
+  const staffOnline = {};
+  if(r) r.online.forEach(e=>{ const k=e.type.toLowerCase(); staffOnline[k]=(staffOnline[k]||0)+e.amount; });
+  const names = {}; Object.keys(online).forEach(t=>names[t.toLowerCase()]=t); Object.keys(staffOnline).forEach(k=>{ if(!names[k]) names[k] = (r.online.find(e=>e.type.toLowerCase()===k)||{}).type||k; });
+  const pill = (diff)=> Math.abs(diff)<0.5 ? `<span class="badge badge-ok" style="background:var(--ok-bg,#E3F1E7);color:var(--ok,#2F8F4E);">✓</span>` : `<span class="badge" style="background:var(--urgent-bg);color:var(--urgent);">${diff>0?'+':'−'}${peso(Math.abs(diff))}</span>`;
+  const line = (label, lv, st)=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);gap:6px;"><span>${escHtml(label)}</span><span style="text-align:right;"><b>${peso(lv)}</b> <span style="color:var(--text-muted);">vs ${st==null?'not entered':peso(st)}</span> ${st==null?'':pill(st-lv)}</span></div>`;
+  let rowsHtml = line('Cash sales', cash, r && r.tallyCash!=null ? r.tallyCash : null);
+  let diffTotal = (r && r.tallyCash!=null) ? (r.tallyCash-cash) : 0;
+  Object.keys(names).sort().forEach(k=>{
+    const lv = online[names[k]]||0, st = staffOnline[k]||0;
+    rowsHtml += line(names[k], lv, st); diffTotal += (st-lv);
+  });
+  const loyTotalOnline = Object.values(online).reduce((a,b)=>a+b,0);
+  const staffTotalOnline = Object.values(staffOnline).reduce((a,b)=>a+b,0);
+  const bad = Math.abs(diffTotal)>=0.5 || (r && r.tallyCash==null);
+  const near = (d.near||[]);
+  const nearHtml = near.length ? `<p style="margin:10px 0 4px;font-size:11px;font-weight:600;color:var(--text-muted);">⚠️ RECEIPTS NEAR THE CUTOFF (check POS clock)</p>${near.map(n=>`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);padding:2px 0;"><span>${loyTime(n.time)} · #${escHtml(String(n.number))} ${n.inside?'':'(outside window)'}</span><span>${peso(n.total)} · ${escHtml(n.pay)}</span></div>`).join('')}` : '';
+  return `<div class="card" style="margin-top:12px;${bad?'border-color:var(--urgent);background:var(--urgent-bg);':''}">
+    ${head}
+    <p style="margin:0 0 4px;font-size:15px;font-weight:700;color:${bad?'var(--urgent)':'var(--accent)'};">${bad?(Math.abs(diffTotal)>=0.5?'Not tally · '+(diffTotal>0?'staff over ':'staff short ')+peso(Math.abs(diffTotal)):'Cash tally not entered yet'):'Everything tally ✓'}</p>
+    <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);">Loyverse vs staff entry · ${d.count||0} receipts · ${winLine}</p>
+    ${rowsHtml}
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding-top:8px;"><span>Loyverse total (cash + online)</span><span>${peso(cash+loyTotalOnline)}</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);padding-top:2px;"><span>Online: Loyverse ${peso(loyTotalOnline)} · staff ${peso(staffTotalOnline)}</span></div>
+    ${token?`<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);padding-top:6px;"><span>Tokens (not counted)</span><span>${peso(token)}</span></div>`:''}
+    ${nearHtml}
+    <p style="margin:8px 0 0;font-size:10px;color:var(--text-muted);">Updated ${new Date(L.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</p>
+    ${btns}
+  </div>`;
+}
+function openLoySettings(){ ui.modal = {type:'loy-settings'}; render(); }
+function renderLoySettingsModal(){
+  const st = loySettings();
+  const seen = ui.loy && ui.loy.data ? Object.keys(ui.loy.data.byType||{}) : [];
+  const names = [...new Set([...Object.keys(LOY_DEFAULT_MAP), ...Object.keys(st.map).map(k=>k.toUpperCase()), ...seen.map(n=>n.toUpperCase())])];
+  const rows = names.map((n,i)=>`<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="flex:1;font-size:12px;">${escHtml(n)}</span><span style="color:var(--text-muted);">→</span><input data-loy="${escHtml(n)}" value="${escHtml(loyTarget(n))}" style="flex:1;min-width:0;padding:7px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;" /></div>`).join('');
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet" style="max-height:88vh;overflow:auto;">
+      <p class="modal-title">Loyverse settings</p>
+      <div class="field"><label>Business day starts at</label><input id="loy-start" type="time" value="${st.dayStart}" /></div>
+      <div class="field"><label>App key (this device only)</label><input id="loy-key" type="password" autocomplete="off" value="${escHtml(loyKey())}" placeholder="The LOYVERSE_APP_KEY you set in Supabase" /></div>
+      <p style="font-size:12px;font-weight:600;margin:10px 0 2px;">Match Loyverse payment types</p>
+      <p style="font-size:11px;color:var(--text-muted);margin:0 0 6px;">Type <b>Cash</b> for cash, <b>Token</b> for tokens (not counted). Anything else counts as online under that name.</p>
+      ${rows}
+      <div class="modal-row-actions" style="margin-top:12px;">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="saveLoySettings()">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveLoySettings(){
+  const start = document.getElementById('loy-start').value || '05:00';
+  const key = document.getElementById('loy-key').value.trim();
+  const map = {};
+  document.querySelectorAll('[data-loy]').forEach(el=>{ const v = el.value.trim(); if(v) map[el.getAttribute('data-loy')] = v; });
+  DB.settings.loyverse = {dayStart:start, map};
+  try{ localStorage.setItem('wild_loy_key', key); }catch(e){}
+  const r = ensureSalesReport(ui.salesReportDate);
+  const list = onlineTypesFor(r);
+  const add = Object.values(map).filter(t=>!['cash','token'].includes(t.toLowerCase()) && !list.some(x=>x.toLowerCase()===t.toLowerCase()));
+  const uniq = [...new Set(add)];
+  if(uniq.length) DB.settings.onlineTypes = [...list, ...uniq];
+  persist(['settings']);
+  ui.loy = null;
+  closeModal();
+  showToast('Loyverse settings saved');
+}
+function openLoyRangeModal(){ ui.modal = {type:'loy-range'}; render(); }
+function renderLoyRangeModal(){
+  const w = loyWindow(ui.salesReportDate);
+  const f = iso=>{ const d = new Date(new Date(iso).getTime()+8*3600*1000); return d.toISOString().slice(0,16); };
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-sheet">
+      <p class="modal-title">Custom range</p>
+      <p style="font-size:12px;color:var(--text-muted);margin:-6px 0 10px;">Use this when a day looks wrong. Philippine time.</p>
+      <div class="field"><label>From</label><input id="loy-from" type="datetime-local" value="${f(w.from)}" /></div>
+      <div class="field"><label>To</label><input id="loy-to" type="datetime-local" value="${f(w.to)}" /></div>
+      <div class="modal-row-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn" onclick="applyLoyRange()">Check</button>
+      </div>
+    </div>
+  </div>`;
+}
+function applyLoyRange(){
+  const a = document.getElementById('loy-from').value, b = document.getElementById('loy-to').value;
+  if(!a || !b){ showToast('Pick both times'); return; }
+  const from = new Date(a+':00+08:00'), to = new Date(b+':00+08:00');
+  if(!(to>from)){ showToast('"To" must be after "From"'); return; }
+  ui.loyRange = {date:ui.salesReportDate, from:from.toISOString(), to:to.toISOString()};
+  closeModal();
+  loyFetch();
 }
 function openTallyModal(){
   if(!isSalesReportEditable(ui.salesReportDate)) return;
@@ -4894,13 +5055,13 @@ function renderSalesCashDrawer(){
       ${editable
         ? `<input id="cash-${d}" type="number" min="0" step="1" value="${count===0?'':count}" placeholder="0" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setCashDrawerCount(${d}, this)" />`
         : `<span style="font-size:13px;">${count} pc${count===1?'':'s'}</span>`}
-      <span style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
+      <span id="dsub-${d}" style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
     </div>`;
   }).join('');
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Closing Total Cash Drawer</p></div></header>
   <div class="screen" style="padding-top:0;">
-    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL IN DRAWER</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(cashDrawerTotal(r))}</p></div>
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL IN DRAWER</p><p id="dtotal" style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(cashDrawerTotal(r))}</p></div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
     ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Enter how many bills/coins of each denomination are in the drawer.</p>` : ''}
   </div>`;
@@ -4913,34 +5074,81 @@ function flushSalesDrawerSave(){
 function setCashDrawerCount(denom, el){
   const r = ensureSalesReport(ui.salesReportDate);
   r.cashDrawer[denom] = Math.max(0, parseInt(el.value)||0);
-  render();
-  const newEl = document.getElementById('cash-'+denom);
-  if(newEl) newEl.focus();
+  const subEl = document.getElementById('dsub-'+denom); if(subEl) subEl.textContent = peso(denom*r.cashDrawer[denom]);
+  const totEl = document.getElementById('dtotal'); if(totEl) totEl.textContent = peso(cashDrawerTotal(r));
   clearTimeout(salesDrawerSaveTimer);
   salesDrawerSaveTimer = setTimeout(()=>{ salesDrawerSaveTimer=null; persist(['salesReports']); }, 600);
 }
 window.addEventListener('beforeunload', flushSalesDrawerSave);
 
 function openSalesOnlineScreen(){ ui.screen='sales-online'; render(); }
+const DEFAULT_ONLINE_TYPES = ['GrabFood','FoodPanda','GCash','Maya','GoTyme','Credit Card','Bank Transfer','Other'];
+function onlineTypesFor(r){
+  const base = (DB.settings.onlineTypes && DB.settings.onlineTypes.length) ? DB.settings.onlineTypes.slice() : DEFAULT_ONLINE_TYPES.slice();
+  r.online.forEach(e=>{ if(!base.includes(e.type)) base.push(e.type); });
+  return base;
+}
+function onlineAmountOf(r, type){ return r.online.filter(e=>e.type===type).reduce((s,e)=>s+e.amount,0); }
 function renderSalesOnline(){
   const date = ui.salesReportDate;
   const r = ensureSalesReport(date);
   const editable = isSalesReportEditable(date);
-  const rows = r.online.length ? r.online.map(e=>`
-    <div class="activity-row" style="display:flex;justify-content:space-between;align-items:center;">
-      <p class="activity-text">${e.type}</p>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:13px;font-weight:600;">${peso(e.amount)}</span>
-        ${editable ? `<button class="link-btn" style="color:var(--urgent);" onclick="deleteOnlineSale('${e.id}')">✕</button>` : ''}
-      </div>
-    </div>`).join('') : `<div class="empty-note">No online sales logged yet.</div>`;
+  const owner = isOwner(currentUser());
+  const rows = onlineTypesFor(r).map(t=>{
+    const amt = onlineAmountOf(r, t);
+    const k = encodeURIComponent(t).replace(/'/g,'%27');
+    return `<div class="team-row">
+      <p style="font-size:13px;font-weight:600;margin:0;flex:1;min-width:0;">${escHtml(t)}${owner?` <button class="link-btn" style="color:var(--urgent);font-size:12px;" onclick="removeOnlineType('${k}')">✕</button>`:''}</p>
+      ${editable
+        ? `<div style="display:flex;align-items:center;gap:4px;"><span style="font-size:13px;color:var(--text-muted);">₱</span><input id="onl-${k}" type="number" inputmode="decimal" min="0" step="0.01" value="${amt===0?'':amt}" placeholder="0.00" style="width:110px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:right;" oninput="setOnlineAmount('${k}', this)" /></div>`
+        : `<span id="oamt-${k}" style="font-size:13px;font-weight:600;">${peso(amt)}</span>`}
+    </div>`;
+  }).join('');
   return `
   <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backToSalesReport()">‹</button><p class="greet" style="font-size:16px;">Online Sales</p></div></header>
   <div class="screen" style="padding-top:0;">
-    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL ONLINE SALES</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(onlineSalesTotal(r))}</p></div>
-    <div class="card">${rows}</div>
-    ${editable ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openOnlineFormModal()">+ Add online sale</button>` : ''}
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL ONLINE SALES</p><p id="ototal" style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(onlineSalesTotal(r))}</p></div>
+    <div class="card" style="padding:6px 16px;">${rows}</div>
+    ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Type the amount for each online sales type. Saves automatically.</p>` : ''}
+    ${owner ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="addOnlineType()">+ Add online sales type</button>` : ''}
   </div>`;
+}
+let onlineSaveTimer = null;
+function flushOnlineSave(){ if(onlineSaveTimer){ clearTimeout(onlineSaveTimer); onlineSaveTimer=null; persist(['salesReports']); } }
+window.addEventListener('beforeunload', flushOnlineSave);
+function setOnlineAmount(k, el){
+  const type = decodeURIComponent(k);
+  const r = ensureSalesReport(ui.salesReportDate);
+  const u = currentUser();
+  const amount = Math.max(0, parseFloat(el.value)||0);
+  r.online = r.online.filter(e=>e.type!==type);
+  if(amount>0) r.online.push({id:uid('onl'), type, amount, addedBy:u.name});
+  const totEl = document.getElementById('ototal'); if(totEl) totEl.textContent = peso(onlineSalesTotal(r));
+  clearTimeout(onlineSaveTimer);
+  onlineSaveTimer = setTimeout(()=>{ onlineSaveTimer=null; persist(['salesReports']); logActivity(`set ${type} online sales to ${peso(amount)} in daily sales report`); }, 800);
+}
+function addOnlineType(){
+  if(!isOwner(currentUser())) return;
+  openPromptModal('New online sales type (e.g. Maya)', '', (val)=>{
+    const name = String(val||'').trim();
+    if(!name) return;
+    const r = ensureSalesReport(ui.salesReportDate);
+    const list = onlineTypesFor(r);
+    if(list.some(t=>t.toLowerCase()===name.toLowerCase())){ showToast('Already in the list'); return; }
+    DB.settings.onlineTypes = [...list, name];
+    persist(['settings']);
+    logActivity(`added online sales type "${name}"`);
+  });
+}
+function removeOnlineType(k){
+  if(!isOwner(currentUser())) return;
+  const type = decodeURIComponent(k);
+  openConfirmModal(`Remove "${escHtml(type)}" from the list? Past sales stay in the reports.`, ()=>{
+    const r = ensureSalesReport(ui.salesReportDate);
+    DB.settings.onlineTypes = onlineTypesFor(r).filter(t=>t!==type);
+    persist(['settings']);
+    logActivity(`removed online sales type "${type}"`);
+  });
 }
 function openOnlineFormModal(){ ui.modal={type:'online-form'}; render(); }
 function renderOnlineFormModal(){
@@ -4979,11 +5187,13 @@ function deleteOnlineSale(id){
 function openMorningCashCountScreen(fromReport){
   ui.salesReportDate = dateStr(new Date());
   ui.morningCashFrom = fromReport ? 'sales-report' : 'main';
+  ui.morningCashEdit = false;
   ui.screen = 'morning-cash-count';
   render();
 }
 function backFromMorningCashCount(){
   flushMorningCashSave();
+  ui.morningCashEdit = false;
   if(ui.morningCashFrom==='sales-report'){ ui.screen='sales-report'; }
   else { ui.screen='main'; ui.tab='home'; }
   render();
@@ -5001,27 +5211,29 @@ function renderMorningCashCount(){
       ${editable
         ? `<input id="mcash-${d}" type="number" min="0" step="1" value="${count===0?'':count}" placeholder="0" style="width:70px;padding:8px;border:1px solid var(--border);border-radius:8px;text-align:center;" oninput="setMorningCashCount(${d}, this)" />`
         : `<span style="font-size:13px;">${count} pc${count===1?'':'s'}</span>`}
-      <span style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
+      <span id="msub-${d}" style="font-size:13px;font-weight:600;width:90px;text-align:right;">${peso(sub)}</span>
     </div>`;
   }).join('');
   const submittedNote = r.cashFundsBy ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Last set by ${r.cashFundsBy} at ${new Date(r.cashFundsAt).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}.</p>` : '';
   const lockedBanner = locked ? `
     <div class="card" style="background:var(--accent-light);margin-top:12px;">
-      <p style="margin:0;font-size:12px;font-weight:600;color:var(--accent);">✅ SUBMITTED — LOCKED</p>
-      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">This can no longer be edited.</p>
+      <p style="margin:0;font-size:12px;font-weight:600;color:var(--accent);">✅ SUBMITTED BY STAFF</p>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">${isOwner(currentUser())?'Only you (owner) can correct it.':'This can no longer be edited.'}</p>
     </div>` : '';
-  const submitBtn = editable ? `<button class="btn" style="margin-top:12px;background:#2F8F4E;" onclick="submitMorningCashCount()">✅ Submit Morning Cash Count</button>` : '';
+  const ownerView = isOwner(currentUser());
+  const submitBtn = (editable && !ownerView) ? `<button class="btn" style="margin-top:12px;background:#2F8F4E;" onclick="submitMorningCashCount()">✅ Submit Opening Cash Count</button>` : '';
   return `
-  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backFromMorningCashCount()">‹</button><p class="greet" style="font-size:16px;">Cash Funds (morning)</p></div></header>
+  <header class="topbar"><div class="back-row"><button class="back-btn" onclick="backFromMorningCashCount()">‹</button><p class="greet" style="font-size:16px;flex:1;white-space:nowrap;">Opening Cash Funds</p>${ownerView?`<button class="link-btn" style="font-size:14px;font-weight:600;white-space:nowrap;padding:10px 4px;" onclick="toggleMorningCashEdit()">${ui.morningCashEdit?'Done':'Edit'}</button>`:''}</div></header>
   <div class="screen" style="padding-top:0;">
-    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL MORNING CASH</p><p style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(r.cashFunds||0)}</p></div>
+    <div class="card" style="margin-bottom:12px;"><p style="margin:0;font-size:12px;color:var(--text-muted);">TOTAL OPENING CASH</p><p id="mtotal" style="margin:2px 0 0;font-size:20px;font-weight:700;">${peso(r.cashFunds||0)}</p></div>
     <div class="card" style="padding:6px 16px;">${rows}</div>
-    ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">Count the bills/coins in the drawer at the start of the day.</p>` : ''}
+    ${editable ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:10px;">${ownerView?'Editing: changes save automatically. Tap Done when finished.':'Count the bills/coins in the drawer at the start of the day.'}</p>` : ''}
     ${submittedNote}
     ${submitBtn}
     ${lockedBanner}
   </div>`;
 }
+function toggleMorningCashEdit(){ flushMorningCashSave(); ui.morningCashEdit = !ui.morningCashEdit; render(); }
 let morningCashSaveTimer = null;
 function flushMorningCashSave(){
   if(morningCashSaveTimer){ clearTimeout(morningCashSaveTimer); morningCashSaveTimer=null; persist(['salesReports']); }
@@ -5033,11 +5245,10 @@ function setMorningCashCount(denom, el){
   r.cashFunds = cashFundsBreakdownTotal(r);
   r.cashFundsBy = u.name;
   r.cashFundsAt = Date.now();
-  render();
-  const newEl = document.getElementById('mcash-'+denom);
-  if(newEl) newEl.focus();
+  const subEl = document.getElementById('msub-'+denom); if(subEl) subEl.textContent = peso(denom*r.cashFundsBreakdown[denom]);
+  const totEl = document.getElementById('mtotal'); if(totEl) totEl.textContent = peso(r.cashFunds||0);
   clearTimeout(morningCashSaveTimer);
-  morningCashSaveTimer = setTimeout(()=>{ morningCashSaveTimer=null; persist(['salesReports']); }, 600);
+  morningCashSaveTimer = setTimeout(()=>{ morningCashSaveTimer=null; persist(['salesReports']); if(isOwner(u)) logActivity(`corrected the opening cash funds for ${ui.salesReportDate} (${peso(r.cashFunds)})`); }, 600);
 }
 window.addEventListener('beforeunload', flushMorningCashSave);
 function submitMorningCashCount(){
@@ -5046,8 +5257,8 @@ function submitMorningCashCount(){
   openConfirmModal('Are you sure this is correct and true? Once submitted, you won\'t be able to edit this.', ()=>{
     r.morningCashLocked = true;
     persist(['salesReports']);
-    logActivity(`submitted the morning cash count (${peso(r.cashFunds)})`);
-    showToast('Morning cash count submitted');
+    logActivity(`submitted the opening cash count (${peso(r.cashFunds)})`);
+    showToast('Opening cash count submitted');
   });
 }
 

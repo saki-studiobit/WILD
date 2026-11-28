@@ -3005,7 +3005,7 @@ function renderStock(){
         const i = group[0];
         const s = itemStatus(i);
         const loc = DB.locations.find(l=>l.id===i.locId);
-        const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+        const thumb = '';
         return `<div class="item-row" onclick="openItemModal('${i.id}')">
           <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
             <div><p class="item-name">${i.name}</p><p class="item-meta">${loc?loc.name:''} · ${i.qty} ${i.unit}${openedTag(i)}</p></div>
@@ -3018,7 +3018,7 @@ function renderStock(){
       const groupUrgent = Math.max(...group.map(i=>i.urgent||0));
       const worst = total<=groupUrgent ? 'urgent' : total<=groupLow ? 'low' : 'ok';
       const first = group[0];
-      const thumb = first.photo ? `<img class="item-thumb" src="${first.photo}" />` : `<div class="item-thumb">${initials(first.name)}</div>`;
+      const thumb = '';
       const idsCsv = group.map(i=>i.id).join(',');
       return `<div class="item-row" onclick="openItemGroupModal('${idsCsv}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>
@@ -3033,7 +3033,7 @@ function renderStock(){
       const s = itemStatus(i);
       const loc = DB.locations.find(l=>l.id===i.locId);
       const sub = loc ? loc.subs.find(x=>x.id===i.subId) : null;
-      const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+      const thumb = '';
       const moveBtns = isMgr(u) ? `<div style="display:flex;flex-direction:column;margin-left:6px;">
         <button class="link-btn" style="padding:0;line-height:1;${idx===0?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',-1,'${idsCsv}')">▲</button>
         <button class="link-btn" style="padding:0;line-height:1;${idx===items.length-1?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',1,'${idsCsv}')">▼</button>
@@ -3919,9 +3919,7 @@ function renderItemQtyModal(){
   const u = currentUser();
   const loc = DB.locations.find(l=>l.id===item.locId);
   const sub = loc ? loc.subs.find(x=>x.id===item.subId) : null;
-  const photoBlock = item.photo
-    ? `<img src="${item.photo}" style="width:88px;height:88px;border-radius:14px;object-fit:cover;margin:0 auto 12px;display:block;" />`
-    : `<div style="width:88px;height:88px;border-radius:14px;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;margin:0 auto 12px;">${initials(item.name)}</div>`;
+  const photoBlock = '';
   const usageBlock = item.usage ? `<p style="font-size:11px;color:var(--text-muted);text-align:center;margin:10px 0 0;">Used for: ${item.usage}</p>` : '';
   const todayCheck = item.freshProduce ? DB.freshProduceChecks.find(c=>c.itemId===item.id && c.date===dateStr(new Date())) : null;
   const freshCheckBlock = item.freshProduce ? `
@@ -4328,7 +4326,7 @@ function renderMorningPriority(){
 
   function renderSingleRow(i, idx){
     const s = itemStatus(i);
-    const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+    const thumb = '';
     const loc = DB.locations.find(l=>l.id===i.locId);
     const moveBtns = (isMgr(u) && idx!==undefined) ? `<div style="display:flex;flex-direction:column;margin-left:6px;">
       <button class="link-btn" style="padding:0;line-height:1;${idx===0?'visibility:hidden;':''}" onclick="event.stopPropagation();moveItem('${i.id}',-1,'${pinnedIdsCsv}')">▲</button>
@@ -4364,7 +4362,7 @@ function renderMorningPriority(){
       if(group.length===1){
         const i = group[0];
         const s = itemStatus(i);
-        const thumb = i.photo ? `<img class="item-thumb" src="${i.photo}" />` : `<div class="item-thumb">${initials(i.name)}</div>`;
+        const thumb = '';
         const loc = DB.locations.find(l=>l.id===i.locId);
         return `<div class="item-row" onclick="openItemModal('${i.id}')">
           <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(s)}"></span>
@@ -4381,7 +4379,7 @@ function renderMorningPriority(){
       const groupUrgent = Math.max(...group.map(i=>i.urgent||0));
       const worst = total<=groupUrgent ? 'urgent' : total<=groupLow ? 'low' : 'ok';
       const first = group[0];
-      const thumb = first.photo ? `<img class="item-thumb" src="${first.photo}" />` : `<div class="item-thumb">${initials(first.name)}</div>`;
+      const thumb = '';
       const idsCsv = group.map(i=>i.id).join(',');
       return `<div class="item-row" onclick="openItemGroupModal('${idsCsv}')">
         <div class="item-left">${thumb}<span class="status-dot ${statusDotClass(worst)}"></span>

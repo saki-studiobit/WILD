@@ -2126,7 +2126,7 @@ function prepQualityHtml(it){
     <label style="display:flex;align-items:center;gap:10px;font-size:14px;padding:6px 0;"><input type="checkbox" style="width:20px;height:20px;" ${bad?'checked':''} onchange="setPrepCheck('${it.id}','spoiled')" /> Spoiled, needs to prepare a new batch</label>
     ${who}</div>`;
 }
-function openPrepDetail(id){ ui.modal = {type:'prep-detail', id}; render(); }
+function openPrepDetail(id){ ui.prepUndo = null; ui.modal = {type:'prep-detail', id}; render(); }
 function renderPrepDetailModal(){
   const u = currentUser();
   const it = DB.prep.items.find(x=>x.id===ui.modal.id);
@@ -2141,14 +2141,18 @@ function renderPrepDetailModal(){
   return `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal-sheet" style="max-height:88vh;overflow:auto;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><p class="modal-title" style="margin:0;">${escHtml(it.name)}</p>${prepStatusPill(it)}</div>
     ${prepLocLabel(it)?`<p style="font-size:12px;color:var(--accent);margin:4px 0 0;">📍 ${escHtml(prepLocLabel(it))}</p>`:''}
-    <p style="font-size:26px;font-weight:600;margin:8px 0 0;">${pfmt(it,tot)}</p>
+    <p style="font-size:26px;font-weight:600;margin:8px 0 0;">${pfmt(it,tot)}${(ui.prepUndo && ui.prepUndo.itemId===it.id) ? ' <span class="badge" style="background:#E3F3E8;color:#2F8F4E;vertical-align:middle;">Saved</span>' : ''}</p>
     <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;">${lastCount?'Counted '+new Date(lastCount.ts).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+' by '+escHtml((lastCount.by||'').split(' ')[0])+' · ':''}${it.low>0?'low at '+pfmt(it,it.low):'no low amount set'}</p>
-    <p style="font-size:12px;font-weight:600;margin:6px 0 0;">Batches</p>${batches}
+    <div style="display:flex;gap:8px;align-items:stretch;margin:0 0 4px;">
+      <div style="flex:1 1 0;min-width:0;display:flex;align-items:center;border:1px solid var(--border);border-radius:10px;padding:0 10px;background:var(--surface);"><input id="pd-amt" type="number" inputmode="decimal" enterkeyhint="done" min="0" step="any" placeholder="Remaining amount" onkeydown="if(event.key==='Enter'){event.preventDefault();savePrepInline('${it.id}');}" style="flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:15px;padding:11px 0;color:var(--text);" /><span style="font-size:12px;color:var(--text-muted);padding-left:6px;">${escHtml(pu(it))}</span></div>
+      <button type="button" class="btn" style="width:auto;flex:0 0 auto;padding:0 14px;font-size:14px;white-space:nowrap;" onclick="savePrepInline('${it.id}')">Update amount</button>
+    </div>
+    ${(ui.prepUndo && ui.prepUndo.itemId===it.id) ? `<p style="font-size:12px;color:var(--text-muted);margin:2px 0 6px;">Was ${pfmt(it, ui.prepUndo.before)}. <button class="link-btn" style="font-size:12px;" onclick="undoPrepInline()">Undo</button></p>` : ''}
+    <p style="font-size:12px;font-weight:600;margin:8px 0 0;">Batches</p>${batches}
     ${prepQualityHtml(it)}
     ${r?`<p style="font-size:12px;color:var(--text-muted);margin:10px 0 0;">${r.status==='making'?escHtml(r.takenBy)+' is making it.':'Requested by '+escHtml(r.by)+'.'}</p>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
       ${r ? (r.status==='making' ? `<button class="btn" style="width:auto;padding:9px 14px;" onclick="finishPrep('${it.id}')">Done, add batch</button>` : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="takePrep('${it.id}');closeModal()">I'll make it</button>`) : `<button class="btn" style="width:auto;padding:9px 14px;" onclick="requestPrep('${it.id}')">Request prep</button>`}
-      <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepCountModal('${it.id}')">Update amount</button>
       <button class="btn btn-secondary" style="width:auto;padding:9px 14px;" onclick="openPrepBatchModal('${it.id}',false)">New batch</button>
     </div>
     <div style="display:flex;gap:14px;margin-top:12px;">
@@ -2226,6 +2230,49 @@ function renderPrepCountModal(){
     ${rows}
     <div class="modal-row-actions" style="margin-top:12px;"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button type="button" class="btn" onclick="savePrepCount()">Save count</button></div>
   </div></div>`;
+}
+function applyPrepAmount(it, grams){
+  const u = currentUser();
+  const today = dateStr(new Date());
+  const diff = grams - prepTotal(it);
+  const live = it.batches.filter(b=>b.left>0 && !b.spoiled).sort((a,b)=>a.madeOn.localeCompare(b.madeOn));
+  if(diff < 0){
+    let rem = -diff;
+    for(const b of live){ const take = Math.min(b.left, rem); b.left -= take; rem -= take; if(b.left<=0) b.zeroTs = Date.now(); if(rem<=0) break; }
+  } else if(diff > 0){
+    if(live.length) live[live.length-1].left += diff;
+    else it.batches.push({id:uid('pbt'), madeOn:today, grams:diff, left:diff, useBy:'', notes:'Counted', by:u.name, ts:Date.now()});
+  }
+  DB.prep.counts = DB.prep.counts.filter(c=>!(c.itemId===it.id && c.date===today));
+  DB.prep.counts.push({itemId:it.id, date:today, grams, by:u.name, ts:Date.now()});
+}
+let prepUndoTimer = null;
+function savePrepInline(itemId){
+  const it = DB.prep.items.find(x=>x.id===itemId);
+  const inp = document.getElementById('pd-amt');
+  if(!it || !inp) return;
+  if(inp.value===''){ showToast('Type the remaining amount'); return; }
+  const grams = Math.max(0, Math.round((parseFloat(inp.value)||0)*100)/100);
+  ui.prepUndo = {itemId, batches: JSON.parse(JSON.stringify(it.batches)), counts: JSON.parse(JSON.stringify(DB.prep.counts)), before: prepTotal(it), ts: Date.now()};
+  applyPrepAmount(it, grams);
+  persist(['prep']);
+  logActivity(`updated ${it.name} to ${pfmt(it, grams)}`);
+  clearTimeout(prepUndoTimer);
+  prepUndoTimer = setTimeout(()=>{ if(ui.prepUndo && ui.prepUndo.itemId===itemId){ ui.prepUndo = null; if(ui.modal && ui.modal.type==='prep-detail') render(); } }, 10000);
+  render();
+}
+function undoPrepInline(){
+  const u = ui.prepUndo;
+  if(!u) return;
+  const it = DB.prep.items.find(x=>x.id===u.itemId);
+  if(!it) return;
+  it.batches = u.batches;
+  DB.prep.counts = u.counts;
+  ui.prepUndo = null;
+  persist(['prep']);
+  logActivity(`undid the amount update for ${it.name}`);
+  showToast('Undone');
+  render();
 }
 function savePrepCount(){
   const u = currentUser();

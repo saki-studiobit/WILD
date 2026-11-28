@@ -98,6 +98,7 @@
   .attend-btn{width:100%;padding:12px;border-radius:10px;border:none;font-size:14px;font-weight:600;background:#fff;color:var(--accent);}
   .attend-card.out .attend-btn{background:var(--accent);color:#fff;}
 
+  .stock-sticky{position:sticky;top:var(--hdr,72px);z-index:4;background:var(--bg);margin:0 -18px 6px;padding:6px 18px 0;}
   .chip-row{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;}
   .chip{flex:0 0 auto;padding:7px 14px;border-radius:20px;font-size:13px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);white-space:nowrap;}
   .chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
@@ -1048,10 +1049,10 @@ function groupOpenedTag(items){
   const lines = [];
   items.forEach(i=>{ if(i.trackOpened) openedLinesOf(i).forEach(l=>{ if((l.qty||0) || l.note) lines.push(l); }); });
   if(!lines.length) return '';
-  const q = Math.round(lines.reduce((s,l)=>s+(l.qty||0),0)*100)/100;
-  const notes = lines.map(l=>l.note).filter(Boolean).map(escHtml);
-  const locs = [...new Set(lines.map(openedLineLoc).filter(Boolean))].map(escHtml);
-  return ' · ' + q + ' opened' + (notes.length ? ' (' + notes.join(', ') + ')' : '') + (locs.length ? ' 📍 ' + locs.join(', ') : '');
+  return lines.map(l=>{
+    const w = openedLineLoc(l);
+    return '<br>📍 ' + ((l.qty||0) ? escHtml(String(l.qty)) + ' opened' : 'Opened') + (l.note ? ' ' + escHtml(l.note) : '') + (w ? ' in ' + escHtml(w) : '');
+  }).join('');
 }
 function openedTag(i){ return i.trackOpened ? groupOpenedTag([i]) : ''; }
 function openedLinesHtml(item){
@@ -3058,12 +3059,14 @@ function renderStock(){
       <button class="icon-btn" onclick="openItemModal(null)">+</button>
     </div>
   </header>
-  <div class="screen" style="padding-top:0;">
+  <div class="screen" style="padding-top:0;overflow:visible;">
     <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="openOilLogScreen()">🛢 Cooking Oil Reporting</button>
     ${isMgr(u) ? `<div class="fab-row" style="margin-bottom:14px;gap:6px;"><button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="document.getElementById('hidden-inventory-csv-input').click()">Import CSV</button><button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="downloadInventoryTemplate()">Template</button>${isOwner(u) ? `<button class="btn btn-secondary" style="width:auto;flex:1 1 auto;min-width:0;padding:9px 6px;font-size:12px;white-space:nowrap;" onclick="downloadInventory()">Download inventory</button>` : ''}</div>` : ''}
-    <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
-    <div class="chip-row">${catChips}</div>
-    ${subChips}
+    <div class="stock-sticky">
+      <div class="search-wrap"><input id="stock-search-input" placeholder="Search items or brand..." value="${ui.stockSearch}" oninput="onStockSearch(this)" /></div>
+      <div class="chip-row">${catChips}</div>
+      ${subChips}
+    </div>
     <div class="card" style="padding:6px 12px;">${rows}</div>
   </div>`;
 }
@@ -3966,7 +3969,7 @@ function renderItemGroupModal(){
   if(!items.length) return '';
   const total = Math.round(items.reduce((sum,i)=>sum+i.qty,0)*100)/100;
   const first = items[0];
-  const openedSummary = groupOpenedTag(items).replace(/^ · /,'');
+  const openedSummary = groupOpenedTag(items).replace(/^<br>/,'').replace(/<br>/g,' · ');
   const rows = items.map(i=>{
     const loc = DB.locations.find(l=>l.id===i.locId);
     const sub = loc ? loc.subs.find(s=>s.id===i.subId) : null;
@@ -6280,6 +6283,15 @@ function downloadDeliveriesCSV(){
 }
 
 init();
+
+/* keep the Inventory filters pinned right under the header */
+(function(){
+  function setHdr(){ const h=document.querySelector('header.topbar'); if(h) document.documentElement.style.setProperty('--hdr', h.offsetHeight+'px'); }
+  const a = document.getElementById('app');
+  if(a){ new MutationObserver(setHdr).observe(a,{childList:true,subtree:true}); }
+  window.addEventListener('resize', setHdr);
+  setHdr();
+})();
 </script>
 </body>
 </html>
